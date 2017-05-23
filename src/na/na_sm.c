@@ -37,7 +37,9 @@
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#if defined(NA_SM_HAS_CMA)
+#if defined(NA_SM_HAS_XPMEM)
+#include <xpmem.h>
+#elif defined(NA_SM_HAS_CMA)
 #include <sys/uio.h>
 #elif defined(__APPLE__)
 #include <mach/mach.h>
@@ -229,6 +231,12 @@ struct na_sm_mem_handle {
     unsigned long iovcnt;
     unsigned long flags; /* Flag of operation access */
     size_t len;
+#ifdef NA_SM_HAS_XPMEM
+    union {
+        xpmem_segid_t segid;
+        xpmem_apid_t  apid;
+    } xpmem;
+#endif
 };
 
 /* Lookup info */
@@ -746,7 +754,7 @@ na_sm_mem_handle_create(
     na_mem_handle_t *mem_handle
     );
 
-#ifdef NA_SM_HAS_CMA
+#if defined(NA_SM_HAS_CMA) && !defined(NA_SM_HAS_XPMEM)
 /* mem_handle_create_segments */
 static na_return_t
 na_sm_mem_handle_create_segments(
@@ -764,6 +772,22 @@ na_sm_mem_handle_free(
     na_class_t *na_class,
     na_mem_handle_t mem_handle
     );
+
+#ifdef NA_SM_HAS_XPMEM
+/* mem_publish */
+na_return_t
+na_sm_mem_publish(
+        na_class_t      *na_class,
+        na_mem_handle_t  mem_handle
+        );
+
+/* mem_unpublish */
+na_return_t
+na_sm_mem_unpublish(
+        na_class_t      *na_class,
+        na_mem_handle_t  mem_handle
+        );
+#endif
 
 /* mem_handle_get_serialize_size */
 static na_size_t
@@ -876,7 +900,7 @@ const na_class_t na_sm_class_g = {
     na_sm_msg_send_expected,                /* msg_send_expected */
     na_sm_msg_recv_expected,                /* msg_recv_expected */
     na_sm_mem_handle_create,                /* mem_handle_create */
-#ifdef NA_SM_HAS_CMA
+#if defined(NA_SM_HAS_CMA) && !defined(NA_SM_HAS_XPMEM)
     na_sm_mem_handle_create_segments,       /* mem_handle_create_segments */
 #else
     NULL,                                   /* mem_handle_create_segments */
@@ -884,8 +908,13 @@ const na_class_t na_sm_class_g = {
     na_sm_mem_handle_free,                  /* mem_handle_free */
     NULL,                                   /* mem_register */
     NULL,                                   /* mem_deregister */
+#ifdef NA_SM_HAS_XPMEM
+    na_sm_mem_publish,                      /* mem_publish */
+    na_sm_mem_unpublish,                    /* mem_unpublish */
+#else
     NULL,                                   /* mem_publish */
     NULL,                                   /* mem_unpublish */
+#endif
     na_sm_mem_handle_get_serialize_size,    /* mem_handle_get_serialize_size */
     na_sm_mem_handle_serialize,             /* mem_handle_serialize */
     na_sm_mem_handle_deserialize,           /* mem_handle_deserialize */
@@ -3273,6 +3302,9 @@ na_sm_mem_handle_create(na_class_t NA_UNUSED *na_class, void *buf,
     na_sm_mem_handle->iovcnt = 1;
     na_sm_mem_handle->flags = flags;
     na_sm_mem_handle->len = buf_size;
+#ifdef NA_SM_HAS_XPMEM
+    na_sm_mem_handle->xpmem.segid = 0;
+#endif
 
     *mem_handle = (na_mem_handle_t) na_sm_mem_handle;
 
@@ -3281,7 +3313,7 @@ done:
 }
 
 /*---------------------------------------------------------------------------*/
-#ifdef NA_SM_HAS_CMA
+#if defined(NA_SM_HAS_CMA) && !defined(NA_SM_HAS_XPMEM)
 static na_return_t
 na_sm_mem_handle_create_segments(na_class_t NA_UNUSED *na_class,
     struct na_segment *segments, na_size_t segment_count, unsigned long flags,
@@ -3338,11 +3370,72 @@ na_sm_mem_handle_free(na_class_t NA_UNUSED *na_class,
         (struct na_sm_mem_handle *) mem_handle;
     na_return_t ret = NA_SUCCESS;
 
+#ifdef NA_SM_HAS_XPMEM
+    if (na_sm_mem_handle->xpmem.apid) {
+        if (xpmem_detach(na_sm_mem_handle->iov->iov_base) == -1) {
+            NA_LOG_ERROR("xpmem_detach() failed (%s)", strerror(errno));
+        }
+        if (xpmem_release(na_sm_mem_handle->xpmem.apid) == -1) {
+            NA_LOG_ERROR("xpmem_release() failed (%s)", strerror(errno));
+        }
+    }
+#endif
     free(na_sm_mem_handle->iov);
     free(na_sm_mem_handle);
 
     return ret;
 }
+
+/*---------------------------------------------------------------------------*/
+#ifdef NA_SM_HAS_XPMEM
+na_return_t
+na_sm_mem_publish(na_class_t NA_UNUSED *na_class, na_mem_handle_t mem_handle)
+{
+    struct na_sm_mem_handle *na_sm_mem_handle =
+        (struct na_sm_mem_handle *) mem_handle;
+    xpmem_segid_t xpmem_segid;
+    na_return_t ret = NA_SUCCESS;
+
+    if (na_sm_mem_handle->iovcnt != 1) {
+        NA_LOG_ERROR("Only single contiguous segment supported");
+        ret = NA_SIZE_ERROR;
+        goto done;
+    }
+
+    xpmem_segid = xpmem_make(na_sm_mem_handle->iov->iov_base,
+        na_sm_mem_handle->iov->iov_len, XPMEM_PERMIT_MODE, (void *) 0666);
+    if (xpmem_segid == -1) {
+        NA_LOG_ERROR("xpmem_make() failed (%s)", strerror(errno));
+        ret = NA_PROTOCOL_ERROR;
+        goto done;
+    }
+    na_sm_mem_handle->xpmem.segid = xpmem_segid;
+
+done:
+    return ret;
+}
+
+/*---------------------------------------------------------------------------*/
+na_return_t
+na_sm_mem_unpublish(na_class_t NA_UNUSED *na_class, na_mem_handle_t mem_handle)
+{
+    struct na_sm_mem_handle *na_sm_mem_handle =
+        (struct na_sm_mem_handle *) mem_handle;
+    na_return_t ret = NA_SUCCESS;
+
+    if (na_sm_mem_handle->xpmem.segid) {
+        if (xpmem_remove(na_sm_mem_handle->xpmem.segid) == -1) {
+            NA_LOG_ERROR("xpmem_remove() failed (%s)", strerror(errno));
+            ret = NA_PROTOCOL_ERROR;
+            goto done;
+        }
+        na_sm_mem_handle->xpmem.segid = 0;
+    }
+
+done:
+    return ret;
+}
+#endif
 
 /*---------------------------------------------------------------------------*/
 static na_size_t
@@ -3357,6 +3450,10 @@ na_sm_mem_handle_get_serialize_size(na_class_t NA_UNUSED *na_class,
     for (i = 0; i < na_sm_mem_handle->iovcnt; i++) {
         ret += sizeof(void *) + sizeof(size_t);
     }
+
+#ifdef NA_SM_HAS_XPMEM
+    ret += sizeof(xpmem_segid_t);
+#endif
 
     return ret;
 }
@@ -3384,6 +3481,12 @@ na_sm_mem_handle_serialize(na_class_t NA_UNUSED *na_class, void *buf,
     memcpy(buf_ptr, &na_sm_mem_handle->len, sizeof(size_t));
     buf_ptr += sizeof(size_t);
 
+#ifdef NA_SM_HAS_XPMEM
+    /* XPMEM seg id */
+    memcpy(buf_ptr, &na_sm_mem_handle->xpmem.segid, sizeof(xpmem_segid_t));
+    buf_ptr += sizeof(xpmem_segid_t);
+#endif
+
     /* Segments */
     for (i = 0; i < na_sm_mem_handle->iovcnt; i++) {
         memcpy(buf_ptr, &na_sm_mem_handle->iov[i].iov_base, sizeof(void *));
@@ -3403,6 +3506,10 @@ na_sm_mem_handle_deserialize(na_class_t NA_UNUSED *na_class,
     struct na_sm_mem_handle *na_sm_mem_handle = NULL;
     const char *buf_ptr = (const char *) buf;
     na_return_t ret = NA_SUCCESS;
+#ifdef NA_SM_HAS_XPMEM
+    xpmem_segid_t xpmem_segid;
+    xpmem_apid_t xpmem_apid;
+#endif
     unsigned long i;
 
     na_sm_mem_handle = (struct na_sm_mem_handle *) malloc(
@@ -3412,6 +3519,7 @@ na_sm_mem_handle_deserialize(na_class_t NA_UNUSED *na_class,
           ret = NA_NOMEM_ERROR;
           goto done;
     }
+    memset(na_sm_mem_handle, 0, sizeof(struct na_sm_mem_handle));
 
     /* Number of segments */
     memcpy(&na_sm_mem_handle->iovcnt, buf_ptr, sizeof(unsigned long));
@@ -3430,6 +3538,21 @@ na_sm_mem_handle_deserialize(na_class_t NA_UNUSED *na_class,
     memcpy(&na_sm_mem_handle->len, buf_ptr, sizeof(size_t));
     buf_ptr += sizeof(size_t);
 
+#ifdef NA_SM_HAS_XPMEM
+    memcpy(&xpmem_segid, buf_ptr, sizeof(xpmem_segid_t));
+    buf_ptr += sizeof(xpmem_segid_t);
+
+    /* Get XPMEM apid from XPMEM segid */
+    xpmem_apid = xpmem_get(xpmem_segid, XPMEM_RDWR, XPMEM_PERMIT_MODE,
+        (void *)0666);
+    if (xpmem_apid == -1) {
+        NA_LOG_ERROR("xpmem_get() failed (%s)", strerror(errno));
+        ret = NA_PROTOCOL_ERROR;
+        goto done;
+    }
+    na_sm_mem_handle->xpmem.apid = xpmem_apid;
+#endif
+
     /* Segments */
     na_sm_mem_handle->iov = (struct iovec *) malloc(na_sm_mem_handle->iovcnt *
         sizeof(struct iovec));
@@ -3439,7 +3562,23 @@ na_sm_mem_handle_deserialize(na_class_t NA_UNUSED *na_class,
         goto done;
     }
     for (i = 0; i < na_sm_mem_handle->iovcnt; i++) {
+#ifdef NA_SM_HAS_XPMEM
+        struct xpmem_addr xpmem_addr;
+        void *iov_base;
+
+        /* Attach */
+        xpmem_addr.apid = xpmem_apid;
+        xpmem_addr.offset = 0;
+        iov_base = xpmem_attach(xpmem_addr, na_sm_mem_handle->len, NULL);
+        if (iov_base == (void *)-1) {
+            NA_LOG_ERROR("xpmem_attach() failed (%s)", strerror(errno));
+            ret = NA_PROTOCOL_ERROR;
+            goto done;
+        }
+        na_sm_mem_handle->iov[i].iov_base = iov_base;
+#else
         memcpy(&na_sm_mem_handle->iov[i].iov_base, buf_ptr, sizeof(void *));
+#endif
         buf_ptr += sizeof(void *);
         memcpy(&na_sm_mem_handle->iov[i].iov_len, buf_ptr, sizeof(size_t));
         buf_ptr += sizeof(size_t);
@@ -3467,7 +3606,9 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     struct iovec *local_iov, *remote_iov;
     unsigned long liovcnt, riovcnt;
     na_return_t ret = NA_SUCCESS;
-#if defined(NA_SM_HAS_CMA)
+#if defined(NA_SM_HAS_XPMEM)
+    (void) na_sm_addr;
+#elif defined(NA_SM_HAS_CMA)
     ssize_t nwrite;
 #elif defined(__APPLE__)
     kern_return_t kret;
@@ -3535,7 +3676,15 @@ na_sm_put(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         riovcnt = na_sm_mem_handle_remote->iovcnt;
     }
 
-#if defined(NA_SM_HAS_CMA)
+#if defined(NA_SM_HAS_XPMEM)
+    if (liovcnt > 1 || riovcnt > 1) {
+        NA_LOG_ERROR("Non-contiguous transfers are not supported");
+        ret = NA_PROTOCOL_ERROR;
+        goto done;
+    }
+
+    memcpy(remote_iov->iov_base, local_iov->iov_base, length);
+#elif defined(NA_SM_HAS_CMA)
     nwrite = process_vm_writev(na_sm_addr->pid, local_iov, liovcnt, remote_iov,
         riovcnt, /* unused */0);
     if (nwrite < 0) {
@@ -3609,7 +3758,9 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     struct iovec *local_iov, *remote_iov;
     unsigned long liovcnt, riovcnt;
     na_return_t ret = NA_SUCCESS;
-#if defined(NA_SM_HAS_CMA)
+#if defined(NA_SM_HAS_XPMEM)
+    (void) na_sm_addr;
+#elif defined(NA_SM_HAS_CMA)
     ssize_t nread;
 #elif defined(__APPLE__)
     mach_vm_size_t nread;
@@ -3678,7 +3829,15 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         riovcnt = na_sm_mem_handle_remote->iovcnt;
     }
 
-#if defined(NA_SM_HAS_CMA)
+#if defined(NA_SM_HAS_XPMEM)
+    if (liovcnt > 1 || riovcnt > 1) {
+        NA_LOG_ERROR("Non-contiguous transfers are not supported");
+        ret = NA_PROTOCOL_ERROR;
+        goto done;
+    }
+
+    memcpy(local_iov->iov_base, remote_iov->iov_base, length);
+#elif defined(NA_SM_HAS_CMA)
     nread = process_vm_readv(na_sm_addr->pid, local_iov, liovcnt, remote_iov,
         riovcnt, /* unused */0);
     if (nread < 0) {
@@ -3709,11 +3868,14 @@ na_sm_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
         goto done;
     }
 #endif
+
+#ifndef NA_SM_HAS_XPMEM
     if ((na_size_t)nread != length) {
         NA_LOG_ERROR("Read %ld bytes, was expecting %lu bytes", nread, length);
         ret = NA_SIZE_ERROR;
         goto done;
     }
+#endif
 
     /* Immediate completion */
     ret = na_sm_complete(na_sm_op_id);

@@ -132,7 +132,22 @@ if(NA_USE_SM)
   else()
     include(CheckFunctionExists)
     check_function_exists(process_vm_readv NA_SM_HAS_CMA)
-    if(NA_SM_HAS_CMA OR APPLE)
+    option(NA_SM_USE_XPMEM "Use XPMEM for large transfers." OFF)
+    if(NA_SM_USE_XPMEM)
+      find_package(XPMEM)
+      if(XPMEM_FOUND)
+        message(STATUS "XPMEM include directory: ${XPMEM_INCLUDE_DIR}")
+        set(NA_SM_HAS_XPMEM 1)
+        include_directories(${XPMEM_INCLUDE_DIR})
+        set(NA_EXT_LIB_DEPENDENCIES
+          ${NA_EXT_LIB_DEPENDENCIES}
+          ${XPMEM_LIBRARIES}
+        )
+      else()
+        message(WARNING "Could not find XPMEM.")
+      endif()
+    endif()
+    if(NA_SM_HAS_CMA OR NA_SM_HAS_XPMEM OR APPLE)
       set(NA_PLUGINS ${NA_PLUGINS} na)
       set(NA_HAS_SM 1)
       set(NA_SM_SHM_PREFIX "na_sm" CACHE STRING
