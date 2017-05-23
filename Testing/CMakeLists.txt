@@ -240,6 +240,7 @@ build_mercury_test(server)
 set(MERCURY_tests
   rpc
   bulk
+  bulk_multiple
   bulk_seg
 #  pipeline
   perf
