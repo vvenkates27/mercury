@@ -387,7 +387,8 @@ hg_core_destroy(
  */
 static hg_return_t
 hg_core_reset(
-        struct hg_handle *hg_handle
+        struct hg_handle *hg_handle,
+        int repost
         );
 
 /**
@@ -1513,17 +1514,19 @@ done:
 
 /*---------------------------------------------------------------------------*/
 static hg_return_t
-hg_core_reset(struct hg_handle *hg_handle)
+hg_core_reset(struct hg_handle *hg_handle, int repost)
 {
     /* Reset source address */
-    if (hg_handle->hg_info.addr != HG_ADDR_NULL
-        && hg_handle->hg_info.addr->na_addr != NA_ADDR_NULL) {
-        NA_Addr_free(hg_handle->hg_info.hg_class->na_class,
-            hg_handle->hg_info.addr->na_addr);
-        hg_handle->hg_info.addr->na_addr = NA_ADDR_NULL;
+    if (repost) {
+        if (hg_handle->hg_info.addr != HG_ADDR_NULL
+            && hg_handle->hg_info.addr->na_addr != NA_ADDR_NULL) {
+            NA_Addr_free(hg_handle->hg_info.hg_class->na_class,
+                hg_handle->hg_info.addr->na_addr);
+            hg_handle->hg_info.addr->na_addr = NA_ADDR_NULL;
+        }
+        hg_handle->hg_info.id = 0;
+        hg_handle->hg_info.target_id = 0;
     }
-    hg_handle->hg_info.id = 0;
-    hg_handle->hg_info.target_id = 0;
     hg_handle->callback = NULL;
     hg_handle->arg = NULL;
     hg_handle->cb_type = 0;
@@ -1555,7 +1558,10 @@ hg_core_set_rpc(struct hg_handle *hg_handle, hg_addr_t addr, hg_id_t id)
     /* We allow for NULL addr to be passed at creation time, this allows
      * for pool of handles to be created and later re-used after a call to
      * HG_Core_reset() */
-    if (addr != HG_ADDR_NULL) {
+    if (addr != HG_ADDR_NULL && hg_handle->hg_info.addr != addr) {
+        if (hg_handle->hg_info.addr != HG_ADDR_NULL)
+             hg_core_addr_free(hg_handle->hg_info.hg_class,
+                               hg_handle->hg_info.addr);
         hg_handle->hg_info.addr = addr;
         hg_atomic_incr32(&addr->ref_count); /* Increase ref to addr */
     }
@@ -2287,7 +2293,7 @@ hg_core_reset_post(struct hg_handle *hg_handle)
     if (hg_atomic_decr32(&hg_handle->ref_count))
         goto done;
 
-    ret = hg_core_reset(hg_handle);
+    ret = hg_core_reset(hg_handle, 1);
     if (ret != HG_SUCCESS) {
         HG_LOG_ERROR("Cannot reset handle");
         goto done;
@@ -3651,12 +3657,13 @@ HG_Core_reset(hg_handle_t handle, hg_addr_t addr, hg_id_t id)
     if (hg_atomic_get32(&hg_handle->ref_count) > 1) {
         /* Not safe to reset
          * TODO could add the ability to defer the reset operation */
-        HG_LOG_ERROR("Cannot reset HG handle, handle is still in use");
+        HG_LOG_ERROR("Cannot reset HG handle, handle is still in use, "
+                     "refcount %d.", hg_atomic_get32(&hg_handle->ref_count));
         ret = HG_PROTOCOL_ERROR;
         goto done;
     }
 
-    ret = hg_core_reset(hg_handle);
+    ret = hg_core_reset(hg_handle, 0);
     if (ret != HG_SUCCESS) {
         HG_LOG_ERROR("Could not reset HG handle");
         goto done;
