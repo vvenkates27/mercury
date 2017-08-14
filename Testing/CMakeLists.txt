@@ -83,7 +83,7 @@ if(NA_USE_CCI)
 endif()
 
 if(NA_USE_OFI)
-  set(NA_OFI_TESTING_PROTOCOL "sockets" CACHE STRING "Protocol(s) used for testing (e.g., sockets;psm2;verbs).")
+  set(NA_OFI_TESTING_PROTOCOL "tcp" CACHE STRING "Protocol(s) used for testing (e.g., sockets;psm2;verbs).")
   mark_as_advanced(NA_OFI_TESTING_PROTOCOL)
 endif()
 

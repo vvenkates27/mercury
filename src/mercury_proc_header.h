@@ -90,15 +90,6 @@ struct hg_header_response {
 #define HG_PROC_HEADER_BULK_EXTRA   0x01    /* Extra bulk handle */
 #define HG_PROC_HEADER_NO_RESPONSE  0x04    /* No response required */
 
-/* Inline */
-#ifndef HG_PROC_HEADER_INLINE
-  #if defined(__GNUC__) && !defined(__GNUC_STDC_INLINE__)
-    #define HG_PROC_HEADER_INLINE extern HG_INLINE
-  #else
-    #define HG_PROC_HEADER_INLINE HG_INLINE
-  #endif
-#endif
-
 /*********************/
 /* Public Prototypes */
 /*********************/
@@ -107,26 +98,27 @@ struct hg_header_response {
 extern "C" {
 #endif
 
-HG_EXPORT HG_PROC_HEADER_INLINE size_t hg_proc_header_response_get_size(void);
+static HG_INLINE size_t hg_proc_header_request_get_size(void);
+static HG_INLINE size_t hg_proc_header_response_get_size(void);
 
 /**
  * Get size reserved for request header (separate user data stored in payload).
  *
- * \param hg_class [IN]         HG class
- *
  * \return Non-negative size value
  */
-HG_EXPORT size_t
-hg_proc_header_request_get_size(
-        hg_class_t *hg_class
-        );
+static HG_INLINE size_t
+hg_proc_header_request_get_size(void)
+{
+    /* hg_bulk_t is optional and is not really part of the header */
+    return (sizeof(struct hg_header_request) - sizeof(hg_bulk_t));
+}
 
 /**
  * Get size reserved for response header (separate user data stored in payload).
  *
  * \return Non-negative size value
  */
-HG_PROC_HEADER_INLINE size_t
+static HG_INLINE size_t
 hg_proc_header_response_get_size(void)
 {
     return sizeof(struct hg_header_response);
@@ -175,6 +167,29 @@ HG_EXPORT void
 hg_proc_header_response_finalize(
         struct hg_header_response *header
         );
+
+/**
+ * Reset RPC request header.
+ *
+ * \param header [IN/OUT]       pointer to request header structure
+ *
+ */
+HG_EXPORT void
+hg_proc_header_request_reset(
+        struct hg_header_request *header
+        );
+
+/**
+ * Reset RPC response header.
+ *
+ * \param header [IN/OUT]       pointer to response header structure
+ *
+ */
+HG_EXPORT void
+hg_proc_header_response_reset(
+        struct hg_header_response *header
+        );
+
 
 /**
  * Process private information for sending/receiving RPC request.

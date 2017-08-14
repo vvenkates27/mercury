@@ -46,7 +46,8 @@ typedef enum na_return {
     NA_PERMISSION_ERROR,    /*!< read/write permission error */
     NA_NOMEM_ERROR,         /*!< no memory error */
     NA_PROTOCOL_ERROR,      /*!< unknown error reported from the protocol layer */
-    NA_CANCELED             /*!< operation was canceled */
+    NA_CANCELED,            /*!< operation was canceled */
+    NA_ADDRINUSE_ERROR      /*!< address already in use */
 } na_return_t;
 
 /* Callback operation type */
@@ -370,19 +371,6 @@ NA_Addr_to_string(
         );
 
 /**
- * Get the maximum size of messages supported by expected send/recv.
- * Small message size that may differ from the unexpected message size.
- *
- * \param na_class [IN]         pointer to NA class
- *
- * \return Non-negative value
- */
-NA_EXPORT na_size_t
-NA_Msg_get_max_expected_size(
-        na_class_t *na_class
-        ) NA_WARN_UNUSED_RESULT;
-
-/**
  * Get the maximum size of messages supported by unexpected send/recv.
  * Small message size.
  *
@@ -392,14 +380,66 @@ NA_Msg_get_max_expected_size(
  */
 NA_EXPORT na_size_t
 NA_Msg_get_max_unexpected_size(
-        na_class_t *na_class
+        const na_class_t *na_class
+        ) NA_WARN_UNUSED_RESULT;
+
+/**
+ * Get the maximum size of messages supported by expected send/recv.
+ * Small message size that may differ from the unexpected message size.
+ *
+ * \param na_class [IN]         pointer to NA class
+ *
+ * \return Non-negative value
+ */
+NA_EXPORT na_size_t
+NA_Msg_get_max_expected_size(
+        const na_class_t *na_class
+        ) NA_WARN_UNUSED_RESULT;
+
+/**
+ * Get the header size for unexpected messages. Plugins may use that header
+ * to encode specific information (such as source addr, etc).
+ *
+ * \param na_class [IN]         pointer to NA class
+ *
+ * \return Non-negative value
+ */
+NA_EXPORT na_size_t
+NA_Msg_get_unexpected_header_size(
+        const na_class_t *na_class
+        ) NA_WARN_UNUSED_RESULT;
+
+/**
+ * Get the header size for expected messages. Plugins may use that header
+ * to encode specific information.
+ *
+ * \param na_class [IN]         pointer to NA class
+ *
+ * \return Non-negative value
+ */
+NA_EXPORT na_size_t
+NA_Msg_get_expected_header_size(
+        const na_class_t *na_class
+        ) NA_WARN_UNUSED_RESULT;
+
+/**
+ * Get the maximum tag value that can be used by send/recv (both expected and
+ * unexpected).
+ *
+ * \param na_class [IN]         pointer to NA class
+ *
+ * \return Non-negative value
+ */
+NA_EXPORT na_tag_t
+NA_Msg_get_max_tag(
+        const na_class_t *na_class
         ) NA_WARN_UNUSED_RESULT;
 
 /**
  * Allocate buf_size bytes and return a pointer to the allocated memory.
- * The memory is initialized. If size is 0, NA_Msg_buf_alloc() returns
- * NULL. The plugin_data output parameter can be used by the underlying plugin
- * implementation to store internal memory information.
+ * If size is 0, NA_Msg_buf_alloc() returns NULL. The plugin_data output
+ * parameter can be used by the underlying plugin implementation to store
+ * internal memory information.
  *
  * \param na_class [IN/OUT]     pointer to NA class
  * \param buf_size [IN]         buffer size
@@ -433,37 +473,32 @@ NA_Msg_buf_free(
         );
 
 /**
- * Get the reserved size of unexpected send/recv message. The reserved space
- * starts from the beginning of the unexpected message. NA layer can piggyback
- * some information by using the reserved space.
+ * Initialize a buffer so that it can be safely passed to the
+ * NA_Msg_send_unexpected() call. In the case the underlying plugin adds its
+ * own header to that buffer, the header will be written at this time and the
+ * usable buffer payload will be buf + NA_Msg_get_unexpected_header_size().
  *
- * \param na_class [IN]         pointer to NA class
+ * \param na_class [IN/OUT]     pointer to NA class
+ * \param buf [IN]              pointer to buffer
+ * \param buf_size [IN]         buffer size
  *
- * \return Non-negative value
+ * \return NA_SUCCESS or corresponding NA error code
  */
-NA_EXPORT na_size_t
-NA_Msg_get_reserved_unexpected_size(
-        na_class_t *na_class
-        ) NA_WARN_UNUSED_RESULT;
+NA_EXPORT na_return_t
+NA_Msg_init_unexpected(
+        na_class_t *na_class,
+        void *buf,
+        na_size_t buf_size
+        );
 
 /**
- * Get the maximum tag value that can be used by send/recv (both expected and
- * unexpected).
- *
- * \param na_class [IN]         pointer to NA class
- *
- * \return Non-negative value
- */
-NA_EXPORT na_tag_t
-NA_Msg_get_max_tag(
-        na_class_t *na_class
-        ) NA_WARN_UNUSED_RESULT;
-
-/**
- * Send an unexpected message to dest.
- * Unexpected sends do not require a matching receive to complete. After
- * completion, user callback is placed into a completion queue and can be
- * triggered using NA_Trigger().
+ * Send an unexpected message to dest. Unexpected sends do not require a
+ * matching receive to complete. After completion, the user callback is
+ * placed into the context completion queue and can be triggered using
+ * NA_Trigger().
+ * The plugin_data parameter returned from the NA_Msg_buf_alloc() call must
+ * be passed along with the buffer, it allows plugins to store and retrieve
+ * additional buffer information such as memory descriptors.
  * \remark Note also that unexpected messages do not require an unexpected
  * receive to be posted at the destination before sending the message and the
  * destination is allowed to drop the message without notification.
@@ -504,8 +539,12 @@ NA_Msg_send_unexpected(
  * Receive an unexpected message. Unexpected receives may wait on any tag and
  * any source depending on the implementation, a tag mask allows for messages
  * to be ignored if the plugin has defined the NA_HAS_TAG_MASK feature
- * (see NA_Check_feature() for more details). After completion, user callback
- * is placed into a completion queue and can be triggered using NA_Trigger().
+ * (see NA_Check_feature() for more details). After completion, the user
+ * callback parameter is placed into the context completion queue and can be
+ * triggered using NA_Trigger().
+ * The plugin_data parameter returned from the NA_Msg_buf_alloc() call must
+ * be passed along with the buffer, it allows plugins to store and retrieve
+ * additional buffer information such as memory descriptors.
  *
  * In the case where op_id is not NA_OP_ID_IGNORE and *op_id is NA_OP_ID_NULL,
  * a new operation ID will be internally created and returned. Users may also
@@ -538,12 +577,34 @@ NA_Msg_recv_unexpected(
         );
 
 /**
- * Send an expected message to dest. After completion, user callback is placed
- * into a completion queue and can be triggered using NA_Trigger().
- * \remark Note that expected messages require
- * an expected receive to be posted at the destination before sending the
- * message, otherwise the destination is allowed to drop the message without
- * notification.
+ * Initialize a buffer so that it can be safely passed to the
+ * NA_Msg_send_expected() call. In the case the underlying plugin adds its
+ * own header to that buffer, the header will be written at this time and the
+ * usable buffer payload will be buf + NA_Msg_get_expected_header_size().
+ *
+ * \param na_class [IN/OUT]     pointer to NA class
+ * \param buf [IN]              pointer to buffer
+ * \param buf_size [IN]         buffer size
+ *
+ * \return NA_SUCCESS or corresponding NA error code
+ */
+NA_EXPORT na_return_t
+NA_Msg_init_expected(
+        na_class_t *na_class,
+        void *buf,
+        na_size_t buf_size
+        );
+
+/**
+ * Send an expected message to dest. After completion, the user callback is
+ * placed into the context completion queue and can be triggered using
+ * NA_Trigger().
+ * The plugin_data parameter returned from the NA_Msg_buf_alloc() call must
+ * be passed along with the buffer, it allows plugins to store and retrieve
+ * additional buffer information such as memory descriptors.
+ * \remark Note that expected messages require an expected receive to be posted
+ * at the destination before sending the message, otherwise the destination is
+ * allowed to drop the message without notification.
  *
  * In the case where op_id is not NA_OP_ID_IGNORE and *op_id is NA_OP_ID_NULL,
  * a new operation ID will be internally created and returned. Users may also
@@ -578,8 +639,12 @@ NA_Msg_send_expected(
         );
 
 /**
- * Receive an expected message from source. After completion, user callback is
- * placed into a completion queue and can be triggered using NA_Trigger().
+ * Receive an expected message from source. After completion, the user
+ * callback is placed into the context completion queue and can be triggered
+ * using NA_Trigger().
+ * The plugin_data parameter returned from the NA_Msg_buf_alloc() call must
+ * be passed along with the buffer, it allows plugins to store and retrieve
+ * additional buffer information such as memory descriptors.
  *
  * In the case where op_id is not NA_OP_ID_IGNORE and *op_id is NA_OP_ID_NULL,
  * a new operation ID will be internally created and returned. Users may also

@@ -217,10 +217,6 @@ struct na_ofi_info_lookup {
     na_addr_t noi_addr;
 };
 
-struct na_ofi_info_send_unexpected {
-    /* no extra info */
-};
-
 struct na_ofi_info_recv_unexpected {
     void *noi_buf;
     na_size_t noi_buf_size;
@@ -228,23 +224,11 @@ struct na_ofi_info_recv_unexpected {
     na_tag_t noi_tag;
 };
 
-struct na_ofi_info_send_expected {
-    /* no extra info */
-};
-
 struct na_ofi_info_recv_expected {
     void *noi_buf;
     na_size_t noi_buf_size;
     na_size_t noi_msg_size;
     na_tag_t noi_tag;
-};
-
-struct na_ofi_info_put {
-    /* no extra info */
-};
-
-struct na_ofi_info_get {
-    /* no extra info */
 };
 
 struct na_ofi_op_id {
@@ -262,12 +246,8 @@ struct na_ofi_op_id {
     hg_atomic_int32_t noo_canceled; /* Operation canceled  */
     union {
         struct na_ofi_info_lookup noo_lookup;
-        struct na_ofi_info_send_unexpected noo_send_unexpected;
         struct na_ofi_info_recv_unexpected noo_recv_unexpected;
-        struct na_ofi_info_send_expected noo_send_expected;
         struct na_ofi_info_recv_expected noo_recv_expected;
-        struct na_ofi_info_put noo_put;
-        struct na_ofi_info_get noo_get;
     } noo_info;
     struct na_cb_completion_data noo_completion_data;
     na_uint64_t noo_magic_2;
@@ -303,7 +283,7 @@ na_ofi_class_unlock(na_class_t *na_class)
 }
 
 static NA_INLINE na_bool_t
-na_ofi_with_reqhdr(na_class_t *na_class)
+na_ofi_with_reqhdr(const na_class_t *na_class)
 {
     struct na_ofi_domain *domain = NA_OFI_PRIVATE_DATA(na_class)->nop_domain;
 
@@ -595,17 +575,21 @@ static na_return_t
 na_ofi_addr_to_string(na_class_t *na_class, char *buf, na_size_t *buf_size,
     na_addr_t addr);
 
-/* msg_get_max */
-static na_size_t
-na_ofi_msg_get_max_expected_size(na_class_t *na_class);
-
 /* msg_get_max_unexpected_size */
 static na_size_t
-na_ofi_msg_get_max_unexpected_size(na_class_t *na_class);
+na_ofi_msg_get_max_unexpected_size(const na_class_t *na_class);
 
-/* msg_get_reserved_unexpected_size */
+/* msg_get_max_expected_size */
 static na_size_t
-na_ofi_msg_get_reserved_unexpected_size(na_class_t *na_class);
+na_ofi_msg_get_max_expected_size(const na_class_t *na_class);
+
+/* msg_get_unexpected_header_size */
+static na_size_t
+na_ofi_msg_get_unexpected_header_size(const na_class_t *na_class);
+
+/* msg_get_max_tag */
+static na_tag_t
+na_ofi_msg_get_max_tag(const na_class_t *na_class);
 
 /* msg_buf_alloc */
 static void *
@@ -615,9 +599,9 @@ na_ofi_msg_buf_alloc(na_class_t *na_class, na_size_t size, void **plugin_data);
 static na_return_t
 na_ofi_msg_buf_free(na_class_t *na_class, void *buf, void *plugin_data);
 
-/* msg_get_max_tag */
-static na_tag_t
-na_ofi_msg_get_max_tag(na_class_t *na_class);
+/* msg_init_unexpected */
+static na_return_t
+na_ofi_msg_init_unexpected(na_class_t *na_class, void *buf, na_size_t buf_size);
 
 /* msg_send_unexpected */
 static na_return_t
@@ -729,14 +713,17 @@ const na_class_t na_ofi_class_g = {
     na_ofi_addr_dup,                        /* addr_dup */
     na_ofi_addr_is_self,                    /* addr_is_self */
     na_ofi_addr_to_string,                  /* addr_to_string */
-    na_ofi_msg_get_max_expected_size,       /* msg_get_max_expected_size */
     na_ofi_msg_get_max_unexpected_size,     /* msg_get_max_unexpected_size */
-    na_ofi_msg_get_reserved_unexpected_size,/* msg_get_reserved_unexpected_size */
+    na_ofi_msg_get_max_expected_size,       /* msg_get_max_expected_size */
+    na_ofi_msg_get_unexpected_header_size,  /* msg_get_unexpected_header_size */
+    NULL,                                   /* msg_get_expected_header_size */
+    na_ofi_msg_get_max_tag,                 /* msg_get_max_tag */
     na_ofi_msg_buf_alloc,                   /* msg_buf_alloc */
     na_ofi_msg_buf_free,                    /* msg_buf_free */
-    na_ofi_msg_get_max_tag,                 /* msg_get_max_tag */
+    na_ofi_msg_init_unexpected,             /* msg_init_unexpected */
     na_ofi_msg_send_unexpected,             /* msg_send_unexpected */
     na_ofi_msg_recv_unexpected,             /* msg_recv_unexpected */
+    NULL,                                   /* msg_init_expected */
     na_ofi_msg_send_expected,               /* msg_send_expected */
     na_ofi_msg_recv_expected,               /* msg_recv_expected */
     na_ofi_mem_handle_create,               /* mem_handle_create */
@@ -1684,8 +1671,10 @@ na_ofi_initialize(na_class_t *na_class, const struct na_info *na_info,
         goto out;
     }
 
+    /*
     NA_LOG_DEBUG("created endpoint addr %s.\n",
         NA_OFI_PRIVATE_DATA(na_class)->nop_uri);
+    */
 
 out:
     if (ret != NA_SUCCESS && na_class->private_data) {
@@ -2098,7 +2087,14 @@ na_ofi_addr_to_string(na_class_t NA_UNUSED *na_class, char *buf,
 
 /*---------------------------------------------------------------------------*/
 static na_size_t
-na_ofi_msg_get_max_expected_size(na_class_t NA_UNUSED *na_class)
+na_ofi_msg_get_max_unexpected_size(const na_class_t NA_UNUSED *na_class)
+{
+    return NA_OFI_UNEXPECTED_SIZE;
+}
+
+/*---------------------------------------------------------------------------*/
+static na_size_t
+na_ofi_msg_get_max_expected_size(const na_class_t NA_UNUSED *na_class)
 {
     /*
      * Use same size as NA_OFI_UNEXPECTED_SIZE to save memory footprint.
@@ -2119,19 +2115,19 @@ na_ofi_msg_get_max_expected_size(na_class_t NA_UNUSED *na_class)
 
 /*---------------------------------------------------------------------------*/
 static na_size_t
-na_ofi_msg_get_max_unexpected_size(na_class_t NA_UNUSED *na_class)
-{
-    return NA_OFI_UNEXPECTED_SIZE;
-}
-
-/*---------------------------------------------------------------------------*/
-static na_size_t
-na_ofi_msg_get_reserved_unexpected_size(na_class_t *na_class)
+na_ofi_msg_get_unexpected_header_size(const na_class_t *na_class)
 {
     if (na_ofi_with_reqhdr(na_class) == NA_TRUE)
         return sizeof(struct na_ofi_reqhdr);
     else
         return 0;
+}
+
+/*---------------------------------------------------------------------------*/
+static na_tag_t
+na_ofi_msg_get_max_tag(const na_class_t NA_UNUSED *na_class)
+{
+    return NA_OFI_MAX_TAG;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -2184,13 +2180,6 @@ na_ofi_msg_buf_free(na_class_t NA_UNUSED *na_class, void *buf,
     hg_mem_aligned_free(buf);
 
     return NA_SUCCESS;
-}
-
-/*---------------------------------------------------------------------------*/
-static na_tag_t
-na_ofi_msg_get_max_tag(na_class_t NA_UNUSED *na_class)
-{
-    return NA_OFI_MAX_TAG;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -2255,6 +2244,26 @@ na_ofi_msg_unexpected_op_pop(na_class_t * na_class)
 
 /*---------------------------------------------------------------------------*/
 static na_return_t
+na_ofi_msg_init_unexpected(na_class_t *na_class, void *buf, na_size_t buf_size)
+{
+    struct na_ofi_private_data *priv = NA_OFI_PRIVATE_DATA(na_class);
+    na_return_t ret = NA_SUCCESS;
+
+    assert(buf_size > sizeof(priv->nop_req_hdr));
+
+    /*
+     * For those providers that don't support FI_SOURCE/FI_SOURCE_ERR, insert
+     * the request header to piggyback the source address of request for
+     * unexpected message.
+     */
+    if (na_ofi_with_reqhdr(na_class) == NA_TRUE)
+        memcpy(buf, &priv->nop_req_hdr, sizeof(priv->nop_req_hdr));
+
+    return ret;
+}
+
+/*---------------------------------------------------------------------------*/
+static na_return_t
 na_ofi_msg_send_unexpected(na_class_t *na_class, na_context_t *context,
     na_cb_t callback, void *arg, const void *buf, na_size_t buf_size,
     void *plugin_data, na_addr_t dest, na_tag_t tag, na_op_id_t *op_id)
@@ -2264,7 +2273,6 @@ na_ofi_msg_send_unexpected(na_class_t *na_class, na_context_t *context,
     struct na_ofi_addr *na_ofi_addr = (struct na_ofi_addr *)dest;
     struct na_ofi_op_id *na_ofi_op_id = NULL;
     struct fid_mr *mr_hdl = plugin_data;
-    void *reqhdr = (void *) buf; /* TODO would be nice to keep the const */
     na_return_t ret = NA_SUCCESS;
     ssize_t rc;
 
@@ -2294,14 +2302,6 @@ na_ofi_msg_send_unexpected(na_class_t *na_class, na_context_t *context,
     /* Assign op_id */
     if (op_id && op_id != NA_OP_ID_IGNORE && *op_id == NA_OP_ID_NULL)
         *op_id = (na_op_id_t) na_ofi_op_id;
-
-    /*
-     * For those providers that don't support FI_SOURCE/FI_SOURCE_ERR, insert
-     * the request header to piggyback the source address of request for
-     * unexpected message.
-     */
-    if (na_ofi_with_reqhdr(na_class) == NA_TRUE)
-        memcpy(reqhdr, &priv->nop_req_hdr, sizeof(priv->nop_req_hdr));
 
     /* Post the FI unexpected send request */
     do {

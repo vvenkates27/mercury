@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 
 /****************/
 /* Local Macros */
@@ -29,9 +30,9 @@
 /* Max addr name */
 #define NA_BMI_MAX_ADDR_NAME 256
 
-/* Default host/port */
-#define NA_BMI_DEFAULT_HOST "localhost"
+/* Default port */
 #define NA_BMI_DEFAULT_PORT 22222
+#define NA_BMI_DEFAULT_PORT_TRIES 128
 
 /* Msg sizes */
 #define NA_BMI_UNEXPECTED_SIZE 4096
@@ -285,18 +286,18 @@ na_bmi_addr_to_string(
 
 /* msg_get_max */
 static na_size_t
-na_bmi_msg_get_max_expected_size(
-        na_class_t *na_class
+na_bmi_msg_get_max_unexpected_size(
+        const na_class_t *na_class
         );
 
 static na_size_t
-na_bmi_msg_get_max_unexpected_size(
-        na_class_t *na_class
+na_bmi_msg_get_max_expected_size(
+        const na_class_t *na_class
         );
 
 static na_tag_t
 na_bmi_msg_get_max_tag(
-        na_class_t *na_class
+        const na_class_t *na_class
         );
 
 /* msg_send_unexpected */
@@ -535,14 +536,17 @@ const na_class_t na_bmi_class_g = {
         na_bmi_addr_dup,                      /* addr_dup */
         na_bmi_addr_is_self,                  /* addr_is_self */
         na_bmi_addr_to_string,                /* addr_to_string */
-        na_bmi_msg_get_max_expected_size,     /* msg_get_max_expected_size */
         na_bmi_msg_get_max_unexpected_size,   /* msg_get_max_unexpected_size */
-        NULL,                                 /* msg_get_reserved_unexpected_size */
+        na_bmi_msg_get_max_expected_size,     /* msg_get_max_expected_size */
+        NULL,                                 /* msg_get_unexpected_header_size */
+        NULL,                                 /* msg_get_expected_header_size */
+        na_bmi_msg_get_max_tag,               /* msg_get_max_tag */
         NULL,                                 /* msg_buf_alloc */
         NULL,                                 /* msg_buf_free */
-        na_bmi_msg_get_max_tag,               /* msg_get_max_tag */
+        NULL,                                 /* msg_init_unexpected */
         na_bmi_msg_send_unexpected,           /* msg_send_unexpected */
         na_bmi_msg_recv_unexpected,           /* msg_recv_unexpected */
+        NULL,                                 /* msg_init_expected */
         na_bmi_msg_send_expected,             /* msg_send_expected */
         na_bmi_msg_recv_expected,             /* msg_recv_expected */
         na_bmi_mem_handle_create,             /* mem_handle_create */
@@ -641,8 +645,10 @@ na_bmi_initialize(na_class_t * na_class, const struct na_info *na_info,
 {
     char method_list[NA_BMI_MAX_ADDR_NAME];
     char listen_addr[NA_BMI_MAX_ADDR_NAME];
+    char my_hostname[NA_BMI_MAX_ADDR_NAME] = {0};
     int flag;
     na_return_t ret = NA_SUCCESS;
+    int i;
 
     flag = (listen) ? BMI_INIT_SERVER : 0;
 
@@ -656,19 +662,33 @@ na_bmi_initialize(na_class_t * na_class, const struct na_info *na_info,
         if (na_info->host_name) {
             desc_len = snprintf(listen_addr, NA_BMI_MAX_ADDR_NAME, "%s://%s",
                 na_info->protocol_name, na_info->host_name);
+            if (desc_len > NA_BMI_MAX_ADDR_NAME) {
+                NA_LOG_ERROR("Exceeding max addr name");
+                ret = NA_SIZE_ERROR;
+                goto done;
+            }
+            ret = na_bmi_init(na_class, method_list, listen_addr, flag);
         } else {
-            desc_len = snprintf(listen_addr, NA_BMI_MAX_ADDR_NAME, "%s://%s:%d",
-                na_info->protocol_name, NA_BMI_DEFAULT_HOST, NA_BMI_DEFAULT_PORT);
-        }
-        if (desc_len > NA_BMI_MAX_ADDR_NAME) {
-            NA_LOG_ERROR("Exceeding max addr name");
-            ret = NA_SIZE_ERROR;
-            goto done;
+            /* Addr unspecified but we are in server mode; get local
+             * hostname and then cycle through range of ports until we find
+             * one that works.
+             */
+            ret = gethostname(my_hostname, NA_BMI_MAX_ADDR_NAME);
+            if(ret < 0)
+                sprintf(my_hostname, "localhost");
+
+            ret = NA_ADDRINUSE_ERROR;
+            for(i=0; (i<NA_BMI_DEFAULT_PORT_TRIES && ret == NA_ADDRINUSE_ERROR); i++) {
+                desc_len = snprintf(listen_addr, NA_BMI_MAX_ADDR_NAME, "%s://%s:%d",
+                    na_info->protocol_name, my_hostname, i+NA_BMI_DEFAULT_PORT);
+                ret = na_bmi_init(na_class, method_list, listen_addr, flag);
+            }
         }
     }
+    else {
+        ret = na_bmi_init(na_class, NULL, NULL, flag);
+    }
 
-    ret = na_bmi_init(na_class, (listen) ? method_list : NULL,
-            (listen) ? listen_addr : NULL, flag);
 
 done:
     return ret;
@@ -697,23 +717,29 @@ na_bmi_init(na_class_t *na_class, const char *method_list,
     bmi_ret = BMI_initialize(method_list, listen_addr, flags);
     if (bmi_ret < 0) {
         NA_LOG_ERROR("BMI_initialize() failed");
-        ret = NA_PROTOCOL_ERROR;
+        if(bmi_ret == -BMI_EADDRINUSE)
+            ret = NA_ADDRINUSE_ERROR;
+        else
+            ret = NA_PROTOCOL_ERROR;
         goto done;
     }
 
-    /* Initialize mutex/cond */
-    hg_thread_mutex_init(&NA_BMI_PRIVATE_DATA(na_class)->test_unexpected_mutex);
-    hg_thread_mutex_init(
-            &NA_BMI_PRIVATE_DATA(na_class)->unexpected_msg_queue_mutex);
-    hg_thread_mutex_init(
-            &NA_BMI_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
-
-    /* Initialize atomic op */
-    hg_atomic_set32(&NA_BMI_PRIVATE_DATA(na_class)->rma_tag, NA_BMI_RMA_TAG);
-
 done:
     if (ret != NA_SUCCESS) {
-        na_bmi_finalize(na_class);
+        free(NA_BMI_PRIVATE_DATA(na_class)->listen_addr);
+        free(na_class->private_data);
+    }
+    else
+    {
+        /* Initialize mutex/cond */
+        hg_thread_mutex_init(&NA_BMI_PRIVATE_DATA(na_class)->test_unexpected_mutex);
+        hg_thread_mutex_init(
+                &NA_BMI_PRIVATE_DATA(na_class)->unexpected_msg_queue_mutex);
+        hg_thread_mutex_init(
+                &NA_BMI_PRIVATE_DATA(na_class)->unexpected_op_queue_mutex);
+
+        /* Initialize atomic op */
+        hg_atomic_set32(&NA_BMI_PRIVATE_DATA(na_class)->rma_tag, NA_BMI_RMA_TAG);
     }
 
     return ret;
@@ -1037,16 +1063,7 @@ done:
 
 /*---------------------------------------------------------------------------*/
 static na_size_t
-na_bmi_msg_get_max_expected_size(na_class_t NA_UNUSED *na_class)
-{
-    na_size_t max_expected_size = NA_BMI_EXPECTED_SIZE;
-
-    return max_expected_size;
-}
-
-/*---------------------------------------------------------------------------*/
-static na_size_t
-na_bmi_msg_get_max_unexpected_size(na_class_t NA_UNUSED *na_class)
+na_bmi_msg_get_max_unexpected_size(const na_class_t NA_UNUSED *na_class)
 {
     na_size_t max_unexpected_size = NA_BMI_UNEXPECTED_SIZE;
 
@@ -1054,8 +1071,17 @@ na_bmi_msg_get_max_unexpected_size(na_class_t NA_UNUSED *na_class)
 }
 
 /*---------------------------------------------------------------------------*/
+static na_size_t
+na_bmi_msg_get_max_expected_size(const na_class_t NA_UNUSED *na_class)
+{
+    na_size_t max_expected_size = NA_BMI_EXPECTED_SIZE;
+
+    return max_expected_size;
+}
+
+/*---------------------------------------------------------------------------*/
 static na_tag_t
-na_bmi_msg_get_max_tag(na_class_t NA_UNUSED *na_class)
+na_bmi_msg_get_max_tag(const na_class_t NA_UNUSED *na_class)
 {
     na_tag_t max_tag = NA_BMI_MAX_TAG;
 

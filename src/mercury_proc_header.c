@@ -8,13 +8,8 @@
  * found at the root of the source code distribution tree.
  */
 
-#ifndef _WIN32
-  #define HG_PROC_HEADER_INLINE
-#endif
 #include "mercury_proc_header.h"
 #include "mercury_proc.h"
-#include "mercury_core.h"
-#include "na.h"
 
 #ifdef _WIN32
   #include <winsock2.h>
@@ -42,21 +37,6 @@ HG_Error_to_string(
 /*******************/
 /* Local Variables */
 /*******************/
-
-/*---------------------------------------------------------------------------*/
-size_t
-hg_proc_header_request_get_size(hg_class_t *hg_class)
-{
-    hg_size_t reserved_size = 0;
-
-    if (hg_class != NULL)
-        reserved_size = NA_Msg_get_reserved_unexpected_size(
-                                    HG_Core_class_get_na(hg_class));
-
-    /* hg_bulk_t is optional and is not really part of the header */
-    return (sizeof(struct hg_header_request) - sizeof(hg_bulk_t) +
-            reserved_size);
-}
 
 /*---------------------------------------------------------------------------*/
 void
@@ -112,6 +92,37 @@ hg_proc_header_response_finalize(struct hg_header_response *header)
 }
 
 /*---------------------------------------------------------------------------*/
+void
+hg_proc_header_request_reset(struct hg_header_request *header)
+{
+    header->hg = HG_IDENTIFIER;
+    header->protocol = HG_PROTOCOL_VERSION;
+    header->id = 0;
+    header->flags = 0;
+    header->cookie = 0; /* TODO not used for now */
+    header->crc16 = 0;
+    header->extra_in_handle = HG_BULK_NULL;
+#ifdef HG_HAS_CHECKSUMS
+    /* Create a new CRC16 checksum */
+    mchecksum_reset(header->checksum);
+#endif
+}
+
+/*---------------------------------------------------------------------------*/
+void
+hg_proc_header_response_reset(struct hg_header_response *header)
+{
+    header->flags = 0;
+    header->ret_code = 0;
+    header->cookie = 0;
+    header->crc16 = 0;
+#ifdef HG_HAS_CHECKSUMS
+    /* Create a new CRC16 checksum */
+    mchecksum_reset(header->checksum);
+#endif
+}
+
+/*---------------------------------------------------------------------------*/
 hg_return_t
 hg_proc_header_request(void *buf, size_t buf_size,
     struct hg_header_request *header, hg_proc_op_t op, hg_class_t *hg_class,
@@ -119,10 +130,10 @@ hg_proc_header_request(void *buf, size_t buf_size,
 {
     hg_uint32_t n_protocol, n_id, n_cookie;
     hg_uint16_t n_crc16;
-    void *buf_ptr;
+    void *buf_ptr = buf;
     hg_proc_t proc = HG_PROC_NULL;
+    size_t extra_proc_size_used = 0;
     hg_return_t ret = HG_SUCCESS;
-    *extra_header_size = 0;
 
     if (buf_size < sizeof(struct hg_header_request)) {
         HG_LOG_ERROR("Invalid buffer size");
@@ -137,8 +148,6 @@ hg_proc_header_request(void *buf, size_t buf_size,
         n_cookie = htonl(header->cookie);
     }
 
-    buf_ptr = (char *)buf + NA_Msg_get_reserved_unexpected_size(
-                                    HG_Core_class_get_na(hg_class));
     /* hg */
     buf_ptr = hg_proc_buf_memcpy(buf_ptr, &header->hg, sizeof(hg_uint8_t), op);
 #ifdef HG_HAS_CHECKSUMS
@@ -216,8 +225,12 @@ hg_proc_header_request(void *buf, size_t buf_size,
             HG_LOG_ERROR("Error in proc flush");
             goto done;
         }
-        *extra_header_size = hg_proc_get_size_used(proc);
+
+        extra_proc_size_used = hg_proc_get_size_used(proc);
     }
+
+    if (extra_header_size)
+        *extra_header_size = extra_proc_size_used;
 
 done:
 #ifdef HG_HAS_CHECKSUMS
