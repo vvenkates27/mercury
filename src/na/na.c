@@ -1746,6 +1746,7 @@ NA_Progress(na_class_t *na_class, na_context_t *context, unsigned int timeout)
     struct na_private_context *na_private_context =
         (struct na_private_context *) context;
     double remaining = timeout / 1000.0; /* Convert timeout in ms into seconds */
+    hg_util_int32_t num;
     na_return_t ret = NA_TIMEOUT;
 
     if (!na_class) {
@@ -1765,8 +1766,8 @@ NA_Progress(na_class_t *na_class, na_context_t *context, unsigned int timeout)
     }
 
 #ifdef NA_HAS_MULTI_PROGRESS
-    hg_atomic_incr32(&na_private_context->progressing);
-    while (hg_atomic_get32(&na_private_context->progressing) > 1) {
+    num = hg_atomic_incr32(&na_private_context->progressing);
+    while ( num > 1 && hg_atomic_get32(&na_private_context->progressing) > 1) {
         hg_time_t t1, t2;
 
         /* Timeout is 0 so leave */
@@ -1788,15 +1789,16 @@ NA_Progress(na_class_t *na_class, na_context_t *context, unsigned int timeout)
             break;
         }
 
+        hg_atomic_decr32(&na_private_context->progressing);
         if (hg_thread_cond_timedwait(&na_private_context->progress_cond,
             &na_private_context->progress_mutex,
             (unsigned int) (remaining * 1000.0)) != HG_UTIL_SUCCESS) {
             /* Timeout occurred so leave */
             hg_thread_mutex_unlock(&na_private_context->progress_mutex);
-            hg_atomic_decr32(&na_private_context->progressing);
             goto done;
         }
         hg_thread_mutex_unlock(&na_private_context->progress_mutex);
+        num = hg_atomic_incr32(&na_private_context->progressing);
 
         hg_time_get_current(&t2);
         remaining -= hg_time_to_double(hg_time_subtract(t2, t1));
