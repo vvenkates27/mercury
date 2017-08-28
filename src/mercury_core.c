@@ -40,7 +40,8 @@
 
 #define HG_CORE_MAX_SELF_THREADS    4
 #define HG_CORE_MASK_NBITS          8
-#define HG_CORE_ATOMIC_QUEUE_SIZE 1024
+#define HG_CORE_ATOMIC_QUEUE_SIZE   1024
+#define HG_CORE_PENDING_INCR        256
 
 /* Remove warnings when routine does not use arguments */
 #if defined(__cplusplus)
@@ -388,7 +389,7 @@ hg_core_destroy(
 static hg_return_t
 hg_core_reset(
         struct hg_handle *hg_handle,
-        int repost
+        hg_bool_t reset_info
         );
 
 /**
@@ -1514,10 +1515,10 @@ done:
 
 /*---------------------------------------------------------------------------*/
 static hg_return_t
-hg_core_reset(struct hg_handle *hg_handle, int repost)
+hg_core_reset(struct hg_handle *hg_handle, hg_bool_t reset_info)
 {
     /* Reset source address */
-    if (repost) {
+    if (reset_info) {
         if (hg_handle->hg_info.addr != HG_ADDR_NULL
             && hg_handle->hg_info.addr->na_addr != NA_ADDR_NULL) {
             NA_Addr_free(hg_handle->hg_info.hg_class->na_class,
@@ -1567,7 +1568,7 @@ hg_core_set_rpc(struct hg_handle *hg_handle, hg_addr_t addr, hg_id_t id)
     }
 
     /* We also allow for NULL RPC id to be passed (same reason as above) */
-    if (id) {
+    if (id && hg_handle->hg_info.id != id) {
         struct hg_rpc_info *hg_rpc_info;
         hg_context_t *context = hg_handle->hg_info.context;
         hg_handle->hg_info.id = id;
@@ -1829,6 +1830,10 @@ static int
 hg_core_recv_input_cb(const struct na_cb_info *callback_info)
 {
     struct hg_handle *hg_handle = (struct hg_handle *) callback_info->arg;
+    struct hg_context *hg_context = hg_handle->hg_info.context;
+#ifndef HG_HAS_POST_LIMIT
+    hg_bool_t pending_empty = NA_FALSE;
+#endif
     na_return_t na_ret = NA_SUCCESS;
     int ret = 0;
 
@@ -1864,14 +1869,26 @@ hg_core_recv_input_cb(const struct na_cb_info *callback_info)
             callback_info->info.recv_unexpected.actual_buf_size;
 
         /* Move handle from pending list to processing list */
-        hg_thread_spin_lock(&hg_handle->hg_info.context->pending_list_lock);
+        hg_thread_spin_lock(&hg_context->pending_list_lock);
         HG_LIST_REMOVE(hg_handle, entry);
-        hg_thread_spin_unlock(&hg_handle->hg_info.context->pending_list_lock);
+#ifndef HG_HAS_POST_LIMIT
+        pending_empty = HG_LIST_IS_EMPTY(&hg_context->pending_list);
+#endif
+        hg_thread_spin_unlock(&hg_context->pending_list_lock);
 
-        hg_thread_spin_lock(&hg_handle->hg_info.context->processing_list_lock);
-        HG_LIST_INSERT_HEAD(&hg_handle->hg_info.context->processing_list,
-            hg_handle, entry);
-        hg_thread_spin_unlock(&hg_handle->hg_info.context->processing_list_lock);
+        hg_thread_spin_lock(&hg_context->processing_list_lock);
+        HG_LIST_INSERT_HEAD(&hg_context->processing_list, hg_handle, entry);
+        hg_thread_spin_unlock(&hg_context->processing_list_lock);
+
+#ifndef HG_HAS_POST_LIMIT
+        /* If pending list is empty, post more handles */
+        if (pending_empty
+            && hg_core_context_post(hg_context, HG_CORE_PENDING_INCR,
+                hg_handle->repost) != HG_SUCCESS) {
+            HG_LOG_ERROR("Could not post additional handles");
+            goto done;
+        }
+#endif
 
         /* Get and verify header */
         if (hg_core_proc_header_request(hg_handle, &hg_handle->in_header,
@@ -2206,17 +2223,8 @@ static hg_return_t
 hg_core_context_post(struct hg_context *context, unsigned int request_count,
     hg_bool_t repost)
 {
-    hg_bool_t pending_list_empty = HG_FALSE;
     unsigned int nentry = 0;
     hg_return_t ret = HG_SUCCESS;
-
-    hg_thread_spin_lock(&context->pending_list_lock);
-    pending_list_empty = HG_LIST_IS_EMPTY(&context->pending_list);
-    hg_thread_spin_unlock(&context->pending_list_lock);
-    if (!pending_list_empty) {
-        /* Just leave */
-        goto done;
-    }
 
     /* Create a bunch of handles and post unexpected receives */
     for (nentry = 0; nentry < request_count; nentry++) {
@@ -2293,7 +2301,7 @@ hg_core_reset_post(struct hg_handle *hg_handle)
     if (hg_atomic_decr32(&hg_handle->ref_count))
         goto done;
 
-    ret = hg_core_reset(hg_handle, 1);
+    ret = hg_core_reset(hg_handle, HG_TRUE);
     if (ret != HG_SUCCESS) {
         HG_LOG_ERROR("Cannot reset handle");
         goto done;
@@ -2828,6 +2836,13 @@ HG_Core_finalize(hg_class_t *hg_class)
 
 done:
     return ret;
+}
+
+/*---------------------------------------------------------------------------*/
+void
+HG_Core_cleanup(void)
+{
+    NA_Cleanup();
 }
 
 /*---------------------------------------------------------------------------*/
@@ -3658,12 +3673,12 @@ HG_Core_reset(hg_handle_t handle, hg_addr_t addr, hg_id_t id)
         /* Not safe to reset
          * TODO could add the ability to defer the reset operation */
         HG_LOG_ERROR("Cannot reset HG handle, handle is still in use, "
-                     "refcount %d.", hg_atomic_get32(&hg_handle->ref_count));
+            "refcount: %d", hg_atomic_get32(&hg_handle->ref_count));
         ret = HG_PROTOCOL_ERROR;
         goto done;
     }
 
-    ret = hg_core_reset(hg_handle, 0);
+    ret = hg_core_reset(hg_handle, HG_FALSE);
     if (ret != HG_SUCCESS) {
         HG_LOG_ERROR("Could not reset HG handle");
         goto done;

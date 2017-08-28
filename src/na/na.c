@@ -409,6 +409,22 @@ done:
 }
 
 /*---------------------------------------------------------------------------*/
+void
+NA_Cleanup(void)
+{
+    unsigned int plugin_count =
+        sizeof(na_class_table) / sizeof(na_class_table[0]) - 1;
+    unsigned int i;
+
+    for (i = 0; i < plugin_count; i++) {
+        if (!na_class_table[i]->cleanup)
+            continue;
+
+        na_class_table[i]->cleanup();
+    }
+}
+
+/*---------------------------------------------------------------------------*/
 const char *
 NA_Get_class_name(const na_class_t *na_class)
 {
@@ -1754,8 +1770,10 @@ NA_Progress(na_class_t *na_class, na_context_t *context, unsigned int timeout)
         hg_time_t t1, t2;
 
         /* Timeout is 0 so leave */
-        if (remaining <= 0)
-            goto unlock;
+        if (remaining <= 0) {
+            hg_atomic_decr32(&na_private_context->progressing);
+            goto done;
+        }
 
         hg_time_get_current(&t1);
 
@@ -1774,8 +1792,11 @@ NA_Progress(na_class_t *na_class, na_context_t *context, unsigned int timeout)
             &na_private_context->progress_mutex,
             (unsigned int) (remaining * 1000.0)) != HG_UTIL_SUCCESS) {
             /* Timeout occurred so leave */
-            goto unlock;
+            hg_thread_mutex_unlock(&na_private_context->progress_mutex);
+            hg_atomic_decr32(&na_private_context->progressing);
+            goto done;
         }
+        hg_thread_mutex_unlock(&na_private_context->progress_mutex);
 
         hg_time_get_current(&t2);
         remaining -= hg_time_to_double(hg_time_subtract(t2, t1));

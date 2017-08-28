@@ -55,6 +55,9 @@
 #include <rdma/fi_tagged.h>
 #include <rdma/fi_cm.h>
 #include <rdma/fi_errno.h>
+#ifdef NA_OFI_HAS_EXT_GNI_H
+#include <rdma/fi_ext_gni.h>
+#endif
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -162,6 +165,8 @@ struct na_ofi_domain {
 struct na_ofi_endpoint {
     char *noe_node;             /* Fabric address */
     char *noe_service;          /* Service name */
+    void *noe_auth_key;         /* Auth key */
+    na_size_t noe_auth_key_size;/* Auth key size */
     struct fi_info *noe_prov;   /* OFI provider info */
     struct fid_ep *noe_ep;      /* Endpoint to communicate on */
     struct fid_cq *noe_cq;      /* Completion queue handle */
@@ -515,7 +520,7 @@ na_ofi_domain_close(struct na_ofi_domain *na_ofi_domain);
 
 static na_return_t
 na_ofi_endpoint_open(const struct na_ofi_domain *na_ofi_domain,
-    const char *node, const char *service,
+    const char *node, const char *service, const char *auth_key,
     struct na_ofi_endpoint **na_ofi_endpoint_p);
 
 static na_return_t
@@ -702,6 +707,7 @@ const na_class_t na_ofi_class_g = {
     na_ofi_check_protocol,                  /* check_protocol */
     na_ofi_initialize,                      /* initialize */
     na_ofi_finalize,                        /* finalize */
+    NULL,                                   /* cleanup */
     NULL,                                   /* check_feature */
     NULL,                                   /* context_create */
     NULL,                                   /* context_destroy */
@@ -812,7 +818,7 @@ na_ofi_getinfo(const char *prov_name, struct fi_info **providers)
     }
     hints->domain_attr->av_type       = FI_AV_MAP;
     hints->domain_attr->resource_mgmt = FI_RM_ENABLED;
-#if FI_MINOR_VERSION >= 5
+#if FI_VERSION_GE(NA_OFI_VERSION, FI_VERSION(1,5))
     hints->domain_attr->mr_mode       = ~(FI_MR_BASIC | FI_MR_SCALABLE);
 #else
     hints->domain_attr->mr_mode       = FI_MR_UNSPEC;
@@ -1041,7 +1047,7 @@ na_ofi_domain_open(const char *prov_name, const char *domain_name,
         /* sockets provider without MR_BASIC supporting */
         na_ofi_domain->nod_prov->domain_attr->mr_mode |= FI_MR_SCALABLE;
         na_ofi_domain->nod_mr_mode = NA_OFI_MR_SCALABLE;
-#if defined(FI_SOURCE_ERR)
+#if FI_VERSION_GE(NA_OFI_VERSION, FI_VERSION(1,5))
     } else if (!strcmp(na_ofi_domain->nod_prov_name, NA_OFI_PROV_PSM2_NAME)) {
         na_ofi_domain->nod_prov_type = NA_OFI_PROV_PSM2;
         na_ofi_domain->nod_prov->caps |= (FI_SOURCE | FI_SOURCE_ERR);
@@ -1055,7 +1061,12 @@ na_ofi_domain_open(const char *prov_name, const char *domain_name,
         na_ofi_domain->nod_mr_mode = NA_OFI_MR_BASIC;
     } else if (!strcmp(na_ofi_domain->nod_prov_name, NA_OFI_PROV_GNI_NAME)) {
         na_ofi_domain->nod_prov_type = NA_OFI_PROV_GNI;
+#if FI_VERSION_GE(NA_OFI_VERSION, FI_VERSION(1,5))
+        na_ofi_domain->nod_prov->domain_attr->mr_mode =
+            FI_MR_VIRT_ADDR | FI_MR_ALLOCATED | FI_MR_PROV_KEY;
+#else
         na_ofi_domain->nod_prov->domain_attr->mr_mode |= FI_MR_BASIC;
+#endif
         na_ofi_domain->nod_mr_mode = NA_OFI_MR_BASIC;
     } else {
         NA_LOG_ERROR("bad domain->nod_prov_name %s.",
@@ -1223,7 +1234,7 @@ out:
 /*---------------------------------------------------------------------------*/
 static na_return_t
 na_ofi_endpoint_open(const struct na_ofi_domain *na_ofi_domain,
-    const char *node, const char *service,
+    const char *node, const char *service, const char NA_UNUSED *auth_key,
     struct na_ofi_endpoint **na_ofi_endpoint_p)
 {
     struct na_ofi_endpoint *na_ofi_endpoint;
@@ -1254,6 +1265,30 @@ na_ofi_endpoint_open(const struct na_ofi_domain *na_ofi_domain,
         ret = NA_NOMEM_ERROR;
         goto out;
     }
+
+#if defined(NA_OFI_HAS_EXT_GNI_H) \
+    && FI_VERSION_GE(NA_OFI_VERSION, FI_VERSION(1,5))
+    if (auth_key) {
+        if (na_ofi_domain->nod_prov_type == NA_OFI_PROV_GNI) {
+            struct fi_gni_auth_key fi_gni_auth_key;
+
+            fi_gni_auth_key.type = GNIX_AKT_RAW;
+            fi_gni_auth_key.raw.protection_key = (uint32_t) strtoul(auth_key,
+                NULL, 10);
+
+            na_ofi_endpoint->noe_auth_key = malloc(
+                sizeof(struct fi_gni_auth_key));
+            if (!na_ofi_endpoint->noe_auth_key) {
+                NA_LOG_ERROR("Could not allocate na_ofi_endpoint auth key");
+                ret = NA_NOMEM_ERROR;
+                goto out;
+            }
+            memcpy(na_ofi_endpoint->noe_auth_key, &fi_gni_auth_key,
+                sizeof(struct fi_gni_auth_key));
+            na_ofi_endpoint->noe_auth_key_size = sizeof(struct fi_gni_auth_key);
+        }
+    }
+#endif
 
     /* Resolve node / service (always pass a numeric host) */
     rc = fi_getinfo(NA_OFI_VERSION, na_ofi_endpoint->noe_node,
@@ -1399,6 +1434,7 @@ na_ofi_endpoint_close(struct na_ofi_endpoint *na_ofi_endpoint)
     if (na_ofi_endpoint->noe_prov)
         fi_freeinfo(na_ofi_endpoint->noe_prov);
 
+    free(na_ofi_endpoint->noe_auth_key);
     free(na_ofi_endpoint->noe_node);
     free(na_ofi_endpoint->noe_service);
     free(na_ofi_endpoint);
@@ -1512,7 +1548,7 @@ na_ofi_gen_req_hdr(const char *uri, struct na_ofi_reqhdr *na_ofi_reqhdr)
         goto out;
     }
     *locator++ = '\0';
-    port = (na_uint32_t) atoi(locator);
+    port = (na_uint32_t) strtoul(locator, NULL, 10);
     locator = strrchr(dup_uri, '/');
     if (locator == NULL) {
         ret = NA_INVALID_PARAM;
@@ -1592,6 +1628,7 @@ na_ofi_initialize(na_class_t *na_class, const struct na_info *na_info,
     char domain_name[NA_OFI_MAX_URI_LEN] = {'\0'};
     const char *prov_name;
     char *service = NULL;
+    char *auth_key = NULL;
     na_return_t ret = NA_SUCCESS;
 
     /*
@@ -1648,7 +1685,7 @@ na_ofi_initialize(na_class_t *na_class, const struct na_info *na_info,
 
     /* Create endpoint */
     ret = na_ofi_endpoint_open(NA_OFI_PRIVATE_DATA(na_class)->nop_domain,
-        node, service, &NA_OFI_PRIVATE_DATA(na_class)->nop_endpoint);
+        node, service, auth_key, &NA_OFI_PRIVATE_DATA(na_class)->nop_endpoint);
     if (ret != NA_SUCCESS) {
         NA_LOG_ERROR("Could not create endpoint for %s, %s", node, service);
         goto out;
@@ -2089,7 +2126,32 @@ na_ofi_addr_to_string(na_class_t NA_UNUSED *na_class, char *buf,
 static na_size_t
 na_ofi_msg_get_max_unexpected_size(const na_class_t NA_UNUSED *na_class)
 {
-    return NA_OFI_UNEXPECTED_SIZE;
+    na_size_t max_unexpected_size = NA_OFI_UNEXPECTED_SIZE;
+#ifdef NA_OFI_HAS_EXT_GNI_H
+    struct na_ofi_domain *domain = NA_OFI_PRIVATE_DATA(na_class)->nop_domain;
+
+    if (domain->nod_prov_type == NA_OFI_PROV_GNI) {
+        struct fi_gni_ops_domain *gni_domain_ops;
+        int rc;
+
+        rc = fi_open_ops(&domain->nod_domain->fid, FI_GNI_DOMAIN_OPS_1,
+            0, (void **) &gni_domain_ops, NULL);
+        if (rc != 0) {
+            NA_LOG_ERROR("fi_open_ops failed, rc: %d(%s).", rc, fi_strerror(-rc));
+            goto out;
+        }
+
+        rc = gni_domain_ops->get_val(&domain->nod_domain->fid,
+            GNI_MBOX_MSG_MAX_SIZE, &max_unexpected_size);
+        if (rc != 0) {
+            NA_LOG_ERROR("get_val failed, rc: %d(%s).", rc, fi_strerror(-rc));
+            goto out;
+        }
+    }
+
+out:
+#endif
+    return max_unexpected_size;
 }
 
 /*---------------------------------------------------------------------------*/
@@ -2110,7 +2172,7 @@ na_ofi_msg_get_max_expected_size(const na_class_t NA_UNUSED *na_class)
 
     return max_expected_size;
     */
-    return NA_OFI_UNEXPECTED_SIZE;
+    return na_ofi_msg_get_max_unexpected_size(na_class);
 }
 
 /*---------------------------------------------------------------------------*/
@@ -2135,9 +2197,25 @@ static void *
 na_ofi_msg_buf_alloc(na_class_t *na_class, na_size_t size, void **plugin_data)
 {
     struct na_ofi_domain *domain = NA_OFI_PRIVATE_DATA(na_class)->nop_domain;
+    struct na_ofi_endpoint *endpoint =
+        NA_OFI_PRIVATE_DATA(na_class)->nop_endpoint;
     na_size_t page_size = (na_size_t) hg_mem_get_page_size();
     void *mem_ptr = NULL;
     struct fid_mr *mr_hdl = NULL;
+    struct iovec mr_iov = {0};
+    struct fi_mr_attr attr = {
+        .mr_iov = &mr_iov,
+        .iov_count = 1,
+        .access = (FI_REMOTE_READ | FI_REMOTE_WRITE | FI_SEND |
+            FI_RECV | FI_READ | FI_WRITE),
+        .offset = 0,
+        .requested_key = 0,
+        .context = NULL,
+#if FI_VERSION_GE(NA_OFI_VERSION, FI_VERSION(1,5))
+        .auth_key = NULL,
+        .auth_key_size = 0,
+#endif
+       };
     int rc;
 
     mem_ptr = hg_mem_aligned_alloc(page_size, size);
@@ -2147,9 +2225,22 @@ na_ofi_msg_buf_alloc(na_class_t *na_class, na_size_t size, void **plugin_data)
     }
     memset(mem_ptr, 0, size);
 
-    rc = fi_mr_reg(domain->nod_domain, mem_ptr, size, FI_SEND | FI_RECV,
-                   0ULL /* offset */, (na_uint64_t)mem_ptr /* request_key */,
-                   0 /* flags */, &mr_hdl, NULL /* context */);
+    /* Set IOV */
+    mr_iov.iov_base = mem_ptr;
+    mr_iov.iov_len = (size_t) size;
+    attr.requested_key = (uint64_t) mem_ptr;
+
+    /* If auth key, register memory with new authorization key */
+#if FI_VERSION_GE(NA_OFI_VERSION, FI_VERSION(1,5))
+    if (endpoint->noe_auth_key) {
+        attr.auth_key = (uint8_t *) endpoint->noe_auth_key;
+        attr.auth_key_size = endpoint->noe_auth_key_size;
+    }
+#else
+    (void) endpoint;
+#endif
+
+    rc = fi_mr_regattr(domain->nod_domain, &attr, 0, &mr_hdl);
     if (rc != 0) {
         NA_LOG_ERROR("fi_mr_reg failed, rc: %d(%s).", rc, fi_strerror(-rc));
         hg_mem_aligned_free(mem_ptr);
@@ -2580,12 +2671,26 @@ na_ofi_mem_handle_free(na_class_t NA_UNUSED *na_class,
 
 /*---------------------------------------------------------------------------*/
 static na_return_t
-na_ofi_mem_register(na_class_t NA_UNUSED *na_class,
-    na_mem_handle_t NA_UNUSED mem_handle)
+na_ofi_mem_register(na_class_t *na_class, na_mem_handle_t mem_handle)
 {
     struct na_ofi_mem_handle *na_ofi_mem_handle = mem_handle;
     struct na_ofi_domain *domain = NA_OFI_PRIVATE_DATA(na_class)->nop_domain;
+    struct na_ofi_endpoint *endpoint =
+        NA_OFI_PRIVATE_DATA(na_class)->nop_endpoint;
     na_uint64_t access;
+    struct iovec mr_iov = {0};
+    struct fi_mr_attr attr = {
+        .mr_iov = &mr_iov,
+        .iov_count = 1,
+        .access = 0,
+        .offset = 0,
+        .requested_key = 0,
+        .context = NULL,
+#if FI_VERSION_GE(NA_OFI_VERSION, FI_VERSION(1,5))
+        .auth_key = NULL,
+        .auth_key_size = 0,
+#endif
+       };
     int rc = 0;
     na_return_t ret = NA_SUCCESS;
 
@@ -2593,6 +2698,7 @@ na_ofi_mem_register(na_class_t NA_UNUSED *na_class,
     if (domain->nod_mr_mode == NA_OFI_MR_SCALABLE)
         return NA_SUCCESS;
 
+    /* Set access mode */
     switch (na_ofi_mem_handle->nom_attr) {
         case NA_MEM_READ_ONLY:
             access = FI_REMOTE_READ | FI_WRITE;
@@ -2608,11 +2714,24 @@ na_ofi_mem_register(na_class_t NA_UNUSED *na_class,
             ret = NA_INVALID_PARAM;
             goto out;
     }
+    attr.access = access;
 
-    rc = fi_mr_reg(domain->nod_domain, (void *)na_ofi_mem_handle->nom_base,
-                   na_ofi_mem_handle->nom_size, access, 0ULL /* offset */,
-                   na_ofi_mem_handle->nom_base, 0 /* flags */,
-                   &na_ofi_mem_handle->nom_mr_hdl, NULL /* context */);
+    /* Set IOV */
+    mr_iov.iov_base = (void *)na_ofi_mem_handle->nom_base;
+    mr_iov.iov_len = (size_t) na_ofi_mem_handle->nom_size;
+
+    /* If auth key, register memory with new authorization key */
+#if FI_VERSION_GE(NA_OFI_VERSION, FI_VERSION(1,5))
+    if (endpoint->noe_auth_key) {
+        attr.auth_key = (uint8_t *) endpoint->noe_auth_key;
+        attr.auth_key_size = endpoint->noe_auth_key_size;
+    }
+#else
+    (void) endpoint;
+#endif
+
+    rc = fi_mr_regattr(domain->nod_domain, &attr, 0,
+        &na_ofi_mem_handle->nom_mr_hdl);
     if (rc != 0) {
         NA_LOG_ERROR("fi_mr_reg failed, rc: %d(%s).", rc, fi_strerror(-rc));
         ret = NA_PROTOCOL_ERROR;
@@ -3108,23 +3227,21 @@ static na_return_t
 na_ofi_progress(na_class_t *na_class, na_context_t *context,
     unsigned int timeout)
 {
-    /* Convert timeout in ms into seconds */
-    double remaining = timeout / 1000.0;
     struct na_ofi_private_data *priv = NA_OFI_PRIVATE_DATA(na_class);
     struct fid_cq *cq_hdl = priv->nop_endpoint->noe_cq;
-    struct fid_av *av_hdl = priv->nop_domain->nod_av;
-    struct fid_wait *wait_hdl = priv->nop_endpoint->noe_wait;
+    /* Convert timeout in ms into seconds */
+    double remaining = timeout / 1000.0;
     na_return_t ret = NA_TIMEOUT;
 
     do {
+        struct fi_cq_tagged_entry cq_event[NA_OFI_CQ_EVENT_NUM];
+        fi_addr_t src_addr[NA_OFI_CQ_EVENT_NUM];
         ssize_t rc, i, event_num = 0;
         hg_time_t t1, t2;
-        fi_addr_t src_addr[NA_OFI_CQ_EVENT_NUM];
-        struct fi_cq_tagged_entry cq_event[NA_OFI_CQ_EVENT_NUM];
-        struct fi_cq_err_entry cq_err;
-        fi_addr_t tmp_addr;
 
         if (timeout) {
+            struct fid_wait *wait_hdl = priv->nop_endpoint->noe_wait;
+
             hg_time_get_current(&t1);
 
             if (wait_hdl) {
@@ -3141,10 +3258,10 @@ na_ofi_progress(na_class_t *na_class, na_context_t *context,
         }
 
         na_ofi_class_lock(na_class);
-        if (na_ofi_with_reqhdr(na_class) == NA_FALSE)
+        if (na_ofi_with_reqhdr(na_class) == NA_FALSE) {
             rc = fi_cq_readfrom(cq_hdl, cq_event, NA_OFI_CQ_EVENT_NUM,
                                 src_addr);
-        else
+        } else
             rc = fi_cq_read(cq_hdl, cq_event, NA_OFI_CQ_EVENT_NUM);
         na_ofi_class_unlock(na_class);
         if (rc == -FI_EAGAIN) {
@@ -3156,9 +3273,12 @@ na_ofi_progress(na_class_t *na_class, na_context_t *context,
                 break; /* Return NA_TIMEOUT */
             continue;
         } else if (rc == -FI_EAVAIL) {
-            /* error available */
+            struct fi_cq_err_entry cq_err;
+
             memset(&cq_err, 0, sizeof(cq_err));
+
             na_ofi_class_lock(na_class);
+            /* error available */
             rc = fi_cq_readerr(cq_hdl, &cq_err, 0 /* flags */);
             na_ofi_class_unlock(na_class);
             if (rc != 1) {
@@ -3178,12 +3298,15 @@ na_ofi_progress(na_class_t *na_class, na_context_t *context,
                 */
                 continue;
             } else if (cq_err.err == FI_EADDRNOTAVAIL) {
+                struct fid_av *av_hdl = priv->nop_domain->nod_av;
+                fi_addr_t tmp_addr;
+
                 na_ofi_class_lock(na_class);
                 rc = fi_av_insert(av_hdl, cq_err.err_data, 1, &tmp_addr,
                                   0 /* flags */, NULL /* context */);
                 na_ofi_class_unlock(na_class);
                 if (rc < 0) {
-                    NA_LOG_ERROR("fi_av_insertsvc failed, rc: %d(%s).",
+                    NA_LOG_ERROR("fi_av_insert failed, rc: %d(%s).",
                                  rc, fi_strerror((int) -rc));
                     ret = NA_PROTOCOL_ERROR;
                     break;
@@ -3205,13 +3328,13 @@ na_ofi_progress(na_class_t *na_class, na_context_t *context,
                              cq_err.err, fi_strerror(cq_err.err),
                              cq_err.prov_errno,
                              fi_strerror(-cq_err.prov_errno));
-                rc = NA_PROTOCOL_ERROR;
+                ret = NA_PROTOCOL_ERROR;
                 break;
             }
         } else if (rc <= 0) {
             NA_LOG_ERROR("fi_cq_read(/_readfrom() failed, rc: %d(%s).",
                          rc, fi_strerror((int) -rc));
-            rc = NA_PROTOCOL_ERROR;
+            ret = NA_PROTOCOL_ERROR;
             break;
         } else {
             assert(rc > 0);
