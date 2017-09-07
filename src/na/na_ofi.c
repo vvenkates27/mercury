@@ -421,8 +421,8 @@ na_ofi_addr_ht_lookup(na_class_t *na_class, struct na_ofi_reqhdr *reqhdr,
                       fi_addr_t *src_addr)
 {
     struct na_ofi_domain *domain = NA_OFI_PRIVATE_DATA(na_class)->nop_domain;
-    na_uint64_t addr_key, *new_key;
-    fi_addr_t *fi_addr, tmp_addr, *new_value;
+    na_uint64_t addr_key, *new_key = NULL;
+    fi_addr_t *fi_addr, tmp_addr, *new_value = NULL;
     char *node, service[16];
     struct in_addr in;
     na_return_t ret = NA_SUCCESS;
@@ -477,6 +477,8 @@ na_ofi_addr_ht_lookup(na_class_t *na_class, struct na_ofi_reqhdr *reqhdr,
     new_value = (fi_addr_t *)malloc(sizeof(*new_value));
     if (new_key == NULL || new_value == NULL) {
         NA_LOG_ERROR("cannot allocate memory for new_key/new_value.");
+        free(new_key);
+        free(new_value);
         ret = NA_NOMEM_ERROR;
         goto unlock;
     }
@@ -856,33 +858,49 @@ na_ofi_check_interface(const char *hostname, char *node, size_t node_len,
     char *domain, size_t domain_len)
 {
     struct ifaddrs *ifaddrs = NULL, *ifaddr;
+    struct addrinfo hints, *hostname_res = NULL;
+    char ip_res[INET_ADDRSTRLEN] = {'\0'}; /* This restricts to ipv4 addresses */
     na_return_t ret = NA_SUCCESS;
     na_bool_t found = NA_FALSE;
+    int s;
 
+    /* Try to resolve hostname first so that we can later compare the IP */
+    memset(&hints, 0, sizeof(struct addrinfo));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = 0;
+    hints.ai_protocol = 0;
+    s = getaddrinfo(hostname, NULL, &hints, &hostname_res);
+    if (s == 0) {
+        struct addrinfo *rp;
+
+        for (rp = hostname_res; rp != NULL; rp = rp->ai_next) {
+            /* Get IP */
+            if (!inet_ntop(rp->ai_addr->sa_family,
+                &((struct sockaddr_in *) rp->ai_addr)->sin_addr, ip_res,
+                INET_ADDRSTRLEN)) {
+                NA_LOG_ERROR("IP could not be resolved");
+                ret = NA_PROTOCOL_ERROR;
+                goto out;
+            }
+            break;
+        }
+    }
+
+    /* Check and compare interfaces */
     if (getifaddrs(&ifaddrs) == -1) {
         NA_LOG_ERROR("getifaddrs() failed");
         ret = NA_PROTOCOL_ERROR;
         goto out;
     }
-
-    /* Check and compare interfaces */
     for (ifaddr = ifaddrs; ifaddr != NULL; ifaddr = ifaddr->ifa_next) {
-        char host[NI_MAXHOST];
-        char ip[INET_ADDRSTRLEN]; /* This restricts to ipv4 addresses */
+        char ip[INET_ADDRSTRLEN] = {'\0'}; /* This restricts to ipv4 addresses */
 
         if (ifaddr->ifa_addr == NULL)
             continue;
 
         if (ifaddr->ifa_addr->sa_family != AF_INET)
             continue;
-
-        /* Get hostname */
-        if (getnameinfo(ifaddr->ifa_addr, sizeof(struct sockaddr_in), host,
-            NI_MAXHOST, NULL, 0, 0) != 0) {
-            NA_LOG_ERROR("Name could not be resolved for: %s", ifaddr->ifa_name);
-            ret = NA_PROTOCOL_ERROR;
-            goto out;
-        }
 
         /* Get IP */
         if (!inet_ntop(ifaddr->ifa_addr->sa_family,
@@ -894,8 +912,7 @@ na_ofi_check_interface(const char *hostname, char *node, size_t node_len,
         }
 
         /* Compare hostnames / device names */
-        if (!strcmp(host, hostname) || !strcmp(ip, hostname) ||
-            !strcmp(ifaddr->ifa_name, hostname)) {
+        if (!strcmp(ip, ip_res) || !strcmp(ifaddr->ifa_name, hostname)) {
             if (node_len)
                strncpy(node, ip, node_len);
             if (domain_len)
@@ -913,6 +930,8 @@ na_ofi_check_interface(const char *hostname, char *node, size_t node_len,
 
 out:
     freeifaddrs(ifaddrs);
+    if (hostname_res)
+        freeaddrinfo(hostname_res);
     return ret;
 }
 
@@ -1775,6 +1794,9 @@ na_ofi_op_id_addref(struct na_ofi_op_id *na_ofi_op_id)
 static void
 na_ofi_op_id_decref(struct na_ofi_op_id *na_ofi_op_id)
 {
+    if (na_ofi_op_id == NULL)
+        return;
+
     assert(hg_atomic_get32(&na_ofi_op_id->noo_refcount) > 0);
 
     /* If there are more references, return */
@@ -3235,7 +3257,7 @@ na_ofi_progress(na_class_t *na_class, na_context_t *context,
 
     do {
         struct fi_cq_tagged_entry cq_event[NA_OFI_CQ_EVENT_NUM];
-        fi_addr_t src_addr[NA_OFI_CQ_EVENT_NUM];
+        fi_addr_t src_addr[NA_OFI_CQ_EVENT_NUM] = {FI_ADDR_UNSPEC};
         ssize_t rc, i, event_num = 0;
         hg_time_t t1, t2;
 
@@ -3284,7 +3306,7 @@ na_ofi_progress(na_class_t *na_class, na_context_t *context,
             if (rc != 1) {
                 NA_LOG_ERROR("fi_cq_readerr() failed, rc: %d(%s).",
                              rc, fi_strerror((int) -rc));
-                rc = NA_PROTOCOL_ERROR;
+                ret = NA_PROTOCOL_ERROR;
                 break;
             }
             if (cq_err.err == FI_ECANCELED) {
