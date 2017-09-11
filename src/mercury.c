@@ -695,11 +695,12 @@ HG_Error_to_string(hg_return_t errnum)
 
 /*---------------------------------------------------------------------------*/
 hg_class_t *
-HG_Init(const char *na_info_string, hg_bool_t na_listen)
+HG_Init_opt(const char *na_info_string, hg_bool_t na_listen,
+    const struct hg_init_info *init_info)
 {
     hg_class_t *hg_class = NULL;
 
-    hg_class = HG_Core_init(na_info_string, na_listen);
+    hg_class = HG_Core_init_opt(na_info_string, na_listen, init_info);
     if (!hg_class) {
         HG_LOG_ERROR("Could not create HG class");
         goto done;
@@ -710,6 +711,13 @@ HG_Init(const char *na_info_string, hg_bool_t na_listen)
 
 done:
     return hg_class;
+}
+
+/*---------------------------------------------------------------------------*/
+hg_class_t *
+HG_Init(const char *na_info_string, hg_bool_t na_listen)
+{
+    return HG_Init_opt(na_info_string, na_listen, NULL);
 }
 
 /*---------------------------------------------------------------------------*/

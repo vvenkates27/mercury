@@ -37,6 +37,11 @@ struct hg_info {
     hg_uint8_t target_id;       /* Target ID */
 };
 
+/* HG init info struct */
+struct hg_init_info {
+    hg_int32_t max_contexts; /* Maximum number of contexts for this HG class */
+};
+
 /**
  * Bulk transfer operators.
  */

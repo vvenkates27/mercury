@@ -35,6 +35,11 @@ struct na_segment {
     na_size_t size;     /* Size of the segment in bytes */
 };
 
+/* Init info */
+struct na_init_info {
+    na_int32_t max_contexts; /* Maximum number of contexts for this NA class */
+};
+
 /* Error return codes:
  * Functions return 0 for success or NA_XXX_ERROR for failure */
 typedef enum na_return {
@@ -138,6 +143,26 @@ NA_Initialize(
         ) NA_WARN_UNUSED_RESULT;
 
 /**
+ * Initialize the network abstraction layer with options providing by init info.
+ * Must be finalized with NA_Finalize().
+ *
+ * \param info_string [IN]      host address with port number (e.g.,
+ *                              "tcp://localhost:3344" or
+ *                              "bmi+tcp://localhost:3344")
+ * \param listen [IN]           listen for incoming connections
+ * \param init_info [IN]        Optional NA init info, can be NULL if not
+ *                              needed.
+ *
+ * \return Pointer to NA class or NULL in case of failure
+ */
+NA_EXPORT na_class_t *
+NA_Initialize_opt(
+        const char                *info_string,
+        na_bool_t                  listen,
+        const struct na_init_info *init_info
+        ) NA_WARN_UNUSED_RESULT;
+
+/**
  * Finalize the network abstraction layer.
  *
  * \param na_class [IN/OUT]     pointer to NA class
@@ -172,6 +197,18 @@ NA_EXPORT const char *
 NA_Get_class_name(
         const na_class_t *na_class
         ) NA_WARN_UNUSED_RESULT;
+
+/**
+ * Return the max number of contexts of a NA class.
+ *
+ * \param na_class [IN]         pointer to NA class
+ *
+ * \return positive number of max contexts or negative value in case of failure
+ */
+NA_EXPORT na_int32_t
+NA_Get_max_contexts(
+        na_class_t  *na_class
+        );
 
 /**
  * Return the protocol of the NA class.

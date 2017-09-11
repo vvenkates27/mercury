@@ -46,6 +46,7 @@
 struct na_private_class {
     struct na_class na_class;   /* Must remain as first field */
     char * protocol_name;       /* Name of protocol */
+    na_int32_t max_contexts;    /* Maximum number of contexts */
     na_bool_t listen;           /* Listen for connections */
 };
 
@@ -257,7 +258,8 @@ na_info_print(struct na_info *na_info)
 
 /*---------------------------------------------------------------------------*/
 na_class_t *
-NA_Initialize(const char *info_string, na_bool_t listen)
+NA_Initialize_opt(const char *info_string, na_bool_t listen,
+    const struct na_init_info *init_info)
 {
     struct na_private_class *na_private_class = NULL;
     struct na_info *na_info = NULL;
@@ -280,6 +282,7 @@ NA_Initialize(const char *info_string, na_bool_t listen)
         goto done;
     }
     na_private_class->protocol_name = NULL;
+    na_private_class->max_contexts = (init_info) ? init_info->max_contexts : 1;
 
     plugin_count = sizeof(na_class_table) / sizeof(na_class_table[0]) - 1;
 
@@ -387,6 +390,13 @@ done:
 }
 
 /*---------------------------------------------------------------------------*/
+na_class_t *
+NA_Initialize(const char *info_string, na_bool_t listen)
+{
+    return NA_Initialize_opt(info_string, listen, NULL);
+}
+
+/*---------------------------------------------------------------------------*/
 na_return_t
 NA_Finalize(na_class_t *na_class)
 {
@@ -441,6 +451,21 @@ NA_Get_class_name(const na_class_t *na_class)
 
 done:
     return ret;
+}
+
+/*---------------------------------------------------------------------------*/
+na_int32_t
+NA_Get_max_contexts(na_class_t  *na_class)
+{
+    const struct na_private_class *na_private_class =
+        (const struct na_private_class *) na_class;
+
+    if (!na_private_class) {
+        NA_LOG_ERROR("NULL NA class");
+        return -NA_INVALID_PARAM;
+    }
+
+    return na_private_class->max_contexts;
 }
 
 /*---------------------------------------------------------------------------*/

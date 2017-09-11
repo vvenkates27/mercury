@@ -41,6 +41,26 @@ HG_Core_init(
         );
 
 /**
+ * Initialize the core Mercury layer with options providing by init info.
+ * Must be finalized with HG_Core_finalize().
+ *
+ * \param na_info_string [IN]   host address with port number (e.g.,
+ *                              "tcp://localhost:3344" or
+ *                              "bmi+tcp://localhost:3344")
+ * \param na_listen [IN]        listen for incoming connections
+ * \param init_info [IN]        Optional HG init info, can be NULL if not
+ *                              needed.
+ *
+ * \return Pointer to HG class or NULL in case of failure
+ */
+HG_EXPORT hg_class_t *
+HG_Core_init_opt(
+        const char *na_info_string,
+        hg_bool_t na_listen,
+        const struct hg_init_info *init_info
+        );
+
+/**
  * Initialize the Mercury layer from an existing NA class/context.
  * Must be finalized with HG_Core_finalize().
  *

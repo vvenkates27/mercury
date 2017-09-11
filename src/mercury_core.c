@@ -75,6 +75,7 @@ struct hg_class {
 #endif
     hg_atomic_int32_t n_contexts;       /* Atomic used for number of contexts */
     hg_atomic_int32_t n_addrs;          /* Atomic used for number of addrs */
+    hg_int32_t max_contexts;            /* Max number of contexts */
 };
 
 /* HG context */
@@ -263,7 +264,8 @@ static struct hg_class *
 hg_core_init(
         const char *na_info_string,
         hg_bool_t na_listen,
-        na_class_t *na_init_class
+        na_class_t *na_init_class,
+        const struct hg_init_info *init_info
         );
 
 /**
@@ -970,7 +972,7 @@ done:
 /*---------------------------------------------------------------------------*/
 static struct hg_class *
 hg_core_init(const char *na_info_string, hg_bool_t na_listen,
-    na_class_t *na_init_class)
+    na_class_t *na_init_class, const struct hg_init_info *init_info)
 {
     struct hg_class *hg_class = NULL;
     na_tag_t na_max_tag;
@@ -995,6 +997,9 @@ hg_core_init(const char *na_info_string, hg_bool_t na_listen,
             ret = HG_NA_ERROR;
             goto done;
         }
+        hg_class->max_contexts = (init_info) ? init_info->max_contexts : 1;
+    } else {
+        hg_class->max_contexts = NA_Get_max_contexts(na_init_class);
     }
 
     /* Compute max request tag */
@@ -2771,7 +2776,8 @@ done:
 
 /*---------------------------------------------------------------------------*/
 hg_class_t *
-HG_Core_init(const char *na_info_string, hg_bool_t na_listen)
+HG_Core_init_opt(const char *na_info_string, hg_bool_t na_listen,
+    const struct hg_init_info *init_info)
 {
     struct hg_class *hg_class = NULL;
     hg_return_t ret = HG_SUCCESS;
@@ -2782,7 +2788,7 @@ HG_Core_init(const char *na_info_string, hg_bool_t na_listen)
         goto done;
     }
 
-    hg_class = hg_core_init(na_info_string, na_listen, NULL);
+    hg_class = hg_core_init(na_info_string, na_listen, NULL, init_info);
     if (!hg_class) {
         HG_LOG_ERROR("Cannot initialize HG core layer");
         ret = HG_PROTOCOL_ERROR;
@@ -2798,6 +2804,13 @@ done:
 
 /*---------------------------------------------------------------------------*/
 hg_class_t *
+HG_Core_init(const char *na_info_string, hg_bool_t na_listen)
+{
+    return HG_Core_init_opt(na_info_string, na_listen, NULL);
+}
+
+/*---------------------------------------------------------------------------*/
+hg_class_t *
 HG_Core_init_na(na_class_t *na_class)
 {
     struct hg_class *hg_class = NULL;
@@ -2808,7 +2821,7 @@ HG_Core_init_na(na_class_t *na_class)
         goto done;
     }
 
-    hg_class = hg_core_init(NULL, HG_FALSE, na_class);
+    hg_class = hg_core_init(NULL, HG_FALSE, na_class, NULL);
     if (!hg_class) {
         HG_LOG_ERROR("Cannot initialize HG core layer");
         ret = HG_PROTOCOL_ERROR;
