@@ -302,7 +302,8 @@ na_ofi_with_reqhdr(const na_class_t *na_class)
 {
     struct na_ofi_domain *domain = NA_OFI_PRIVATE_DATA(na_class)->nop_domain;
 
-    return domain->nod_prov_type != NA_OFI_PROV_PSM2;
+    return domain->nod_prov_type != NA_OFI_PROV_PSM2
+        && domain->nod_prov_type != NA_OFI_PROV_GNI;
 }
 
 /**
@@ -858,6 +859,9 @@ na_ofi_getinfo(const char *prov_name, struct fi_info **providers)
 
             /* PSM2 provider requires FI_MR_BASIC bit to be set for now */
             hints->domain_attr->mr_mode |= FI_MR_BASIC;
+        }
+        else if (!strcmp(prov_name, NA_OFI_PROV_GNI_NAME)) {
+            hints->caps |= (FI_SOURCE | FI_SOURCE_ERR);
         }
         else if (!strcmp(prov_name, NA_OFI_PROV_VERBS_NAME)) {
             hints->rx_attr->mode |= FI_CONTEXT;
