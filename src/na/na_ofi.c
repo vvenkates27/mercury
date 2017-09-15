@@ -396,13 +396,12 @@ na_ofi_av_insert(na_class_t *na_class, char *node_str, char *service_str,
         goto out;
     }
 
-    /* The below just to verify the AV address resolution */
-    /*
+    /* For debug purposes, verify the AV address resolution */
     void *peer_addr;
     size_t addrlen;
     char peer_addr_str[NA_OFI_MAX_URI_LEN] = {'\0'};
 
-    addrlen = domain->nod_src_addrlen;
+    addrlen = domain->nod_prov->src_addrlen;
     peer_addr = malloc(addrlen);
     if (peer_addr == NULL) {
         NA_LOG_ERROR("Could not allocate peer_addr.");
@@ -420,7 +419,6 @@ na_ofi_av_insert(na_class_t *na_class, char *node_str, char *service_str,
     NA_LOG_DEBUG("node %s, service %s, peer address %s.",
                  node_str, service_str, peer_addr_str);
     free(peer_addr);
-    */
 
 out:
     return ret;
@@ -2455,6 +2453,7 @@ na_ofi_msg_send_unexpected(na_class_t *na_class, na_context_t *context,
                      na_ofi_addr->noa_uri, rc, fi_strerror((int) -rc));
         ret = NA_PROTOCOL_ERROR;
     }
+NA_LOG_DEBUG("Here");
 
 out:
     if (ret != NA_SUCCESS) {
@@ -3105,6 +3104,7 @@ na_ofi_handle_recv_event(na_class_t *na_class,
         return;
     }
 
+NA_LOG_DEBUG("Here");
     if (cq_event->tag & ~NA_OFI_UNEXPECTED_TAG_IGNORE) {
         if (na_ofi_op_id->noo_type != NA_CB_RECV_EXPECTED) {
             NA_LOG_ERROR("ignore the recv_event as na_ofi_op_id->noo_type %d "
@@ -3139,7 +3139,7 @@ na_ofi_handle_recv_event(na_class_t *na_class,
 
         if (na_ofi_with_reqhdr(na_class) == NA_TRUE) {
             struct in_addr in;
-
+NA_LOG_DEBUG("Here");
             reqhdr = na_ofi_op_id->noo_info.noo_recv_unexpected.noi_buf;
             /* check magic number and swap byte order when needed */
             if (reqhdr->fih_magic == na_ofi_bswap32(NA_OFI_HDR_MAGIC)) {
@@ -3163,6 +3163,32 @@ na_ofi_handle_recv_event(na_class_t *na_class,
                      inet_ntoa(in), reqhdr->fih_port);
             peer_addr->noa_uri = strdup(peer_uri);
         }
+
+/* For debug purposes */
+{
+    void *raw_addr;
+    size_t addrlen;
+    char peer_addr_str[NA_OFI_MAX_URI_LEN] = {'\0'};
+    int rc;
+
+    addrlen = domain->nod_prov->src_addrlen;
+    raw_addr = malloc(addrlen);
+    if (raw_addr == NULL) {
+        NA_LOG_ERROR("Could not allocate peer_addr.");
+        ret = NA_NOMEM_ERROR;
+        goto out;
+    }
+    rc = fi_av_lookup(domain->nod_av, src_addr, raw_addr, &addrlen);
+    if (rc != 0) {
+        NA_LOG_ERROR("fi_av_lookup failed, rc: %d(%s).", rc, fi_strerror(-rc));
+        ret = NA_PROTOCOL_ERROR;
+        goto out;
+    }
+    addrlen = NA_OFI_MAX_URI_LEN;
+    fi_av_straddr(domain->nod_av, raw_addr, peer_addr_str, &addrlen);
+    NA_LOG_DEBUG("peer address %s.", peer_addr_str);
+    free(raw_addr);
+}
 
         peer_addr->noa_addr = src_addr;
         /* For unexpected msg, take one extra ref to be released by
@@ -3312,12 +3338,21 @@ na_ofi_progress(na_class_t *na_class, na_context_t *context,
             continue;
         } else if (rc == -FI_EAVAIL) {
             struct fi_cq_err_entry cq_err;
+#if FI_VERSION_GE(NA_OFI_VERSION, FI_VERSION(1,5))
+            char ep_name[256] = {'\0'};
 
+            /* If the api version is >= 1.5 then err_data and err_data_size
+             * must be provided. */
+            cq_err.err_data = &ep_name;
+            cq_err.err_data_size = 256;
+#else
             memset(&cq_err, 0, sizeof(cq_err));
+#endif
 
             na_ofi_class_lock(na_class);
             /* error available */
             rc = fi_cq_readerr(cq_hdl, &cq_err, 0 /* flags */);
+            NA_LOG_DEBUG("Called fi_cq_readerr (err_data_size=%d)", cq_err.err_data_size);
             na_ofi_class_unlock(na_class);
             if (rc != 1) {
                 NA_LOG_ERROR("fi_cq_readerr() failed, rc: %d(%s).",
@@ -3339,6 +3374,7 @@ na_ofi_progress(na_class_t *na_class, na_context_t *context,
                 struct fid_av *av_hdl = priv->nop_domain->nod_av;
                 fi_addr_t tmp_addr;
 
+                NA_LOG_DEBUG("Inserting new address");
                 na_ofi_class_lock(na_class);
                 rc = fi_av_insert(av_hdl, cq_err.err_data, 1, &tmp_addr,
                                   0 /* flags */, NULL /* context */);
