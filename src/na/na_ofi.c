@@ -839,16 +839,18 @@ na_ofi_getinfo(const char *prov_name, struct fi_info **providers)
         hints->domain_attr->data_progress    = FI_PROGRESS_AUTO;
     } else {
         /* FI_MR_BASIC */
-        hints->domain_attr->mr_mode =
-            NA_OFI_MR_BASIC_REQ | FI_MR_LOCAL | FI_MR_BASIC;
+        hints->domain_attr->mr_mode = NA_OFI_MR_BASIC_REQ | FI_MR_LOCAL;
 
         /* Manual progress (no internal progress thread) */
         hints->domain_attr->control_progress = FI_PROGRESS_MANUAL;
         hints->domain_attr->data_progress    = FI_PROGRESS_MANUAL;
 
-        /* Can retrieve source address from processes not inserted in AV */
         if (!strcmp(prov_name, NA_OFI_PROV_PSM2_NAME)) {
+            /* Can retrieve source address from processes not inserted in AV */
             hints->caps |= (FI_SOURCE | FI_SOURCE_ERR);
+
+            /* PSM2 provider requires FI_MR_BASIC bit to be set for now */
+            hints->domain_attr->mr_mode |= FI_MR_BASIC;
         }
         else if (!strcmp(prov_name, NA_OFI_PROV_VERBS_NAME)) {
             hints->rx_attr->mode |= FI_CONTEXT;
