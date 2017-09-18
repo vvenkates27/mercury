@@ -364,7 +364,7 @@ NA_Initialize_opt(const char *info_string, na_bool_t listen,
         goto done;
     }
     ret = na_private_class->na_class.initialize(&na_private_class->na_class,
-        na_info, listen);
+        na_info, listen, init_info);
     if (ret != NA_SUCCESS) {
         NA_LOG_ERROR("Could not initialize plugin");
         goto done;

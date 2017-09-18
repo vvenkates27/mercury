@@ -193,7 +193,7 @@ na_cci_check_protocol(const char *protocol_name);
 /* initialize */
 static na_return_t
 na_cci_initialize(na_class_t * na_class, const struct na_info *na_info,
-    na_bool_t listen);
+    na_bool_t listen, const struct na_init_info *init_info);
 
 /**
  * initialize
@@ -528,7 +528,7 @@ out:
 /*---------------------------------------------------------------------------*/
 static na_return_t
 na_cci_initialize(na_class_t * na_class, const struct na_info *na_info,
-    na_bool_t listen)
+    na_bool_t listen, const struct na_init_info NA_UNUSED *init_info)
 {
     int rc = 0, i = 0;
     uint32_t caps = 0;

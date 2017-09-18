@@ -595,7 +595,8 @@ static na_return_t
 na_sm_initialize(
     na_class_t *na_class,
     const struct na_info *na_info,
-    na_bool_t listen
+    na_bool_t listen,
+    const struct na_init_info *init_info
     );
 
 /* finalize */
@@ -2434,7 +2435,7 @@ na_sm_check_protocol(const char *protocol_name)
 /*---------------------------------------------------------------------------*/
 static na_return_t
 na_sm_initialize(na_class_t *na_class, const struct na_info NA_UNUSED *na_info,
-    na_bool_t listen)
+    na_bool_t listen, const struct na_init_info NA_UNUSED *init_info)
 {
     static unsigned int id = 0;
     struct na_sm_addr *na_sm_addr = NULL;

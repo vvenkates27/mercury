@@ -992,7 +992,11 @@ hg_core_init(const char *na_info_string, hg_bool_t na_listen,
 
     /* Initialize NA */
     if (!hg_class->na_ext_init) {
-        hg_class->na_class = NA_Initialize(na_info_string, na_listen);
+        struct na_init_info na_info;
+
+        na_info.max_contexts = (init_info) ? init_info->max_contexts : 1;
+        hg_class->na_class = NA_Initialize_opt(na_info_string, na_listen,
+                                               &na_info);
         if (!hg_class->na_class) {
             HG_LOG_ERROR("Could not initialize NA class");
             ret = HG_NA_ERROR;

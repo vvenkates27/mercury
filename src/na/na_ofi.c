@@ -552,7 +552,7 @@ na_ofi_check_protocol(const char *protocol_name);
 /* initialize */
 static na_return_t
 na_ofi_initialize(na_class_t *na_class, const struct na_info *na_info,
-    na_bool_t listen);
+    na_bool_t listen, const struct na_init_info *init_info);
 
 /* finalize */
 static na_return_t
@@ -1656,7 +1656,7 @@ out:
 /*---------------------------------------------------------------------------*/
 static na_return_t
 na_ofi_initialize(na_class_t *na_class, const struct na_info *na_info,
-    na_bool_t NA_UNUSED listen)
+    na_bool_t NA_UNUSED listen, const struct na_init_info NA_UNUSED *init_info)
 {
     char node[NA_OFI_MAX_URI_LEN] = {'\0'};
     char domain_name[NA_OFI_MAX_URI_LEN] = {'\0'};

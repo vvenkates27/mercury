@@ -58,7 +58,8 @@ struct na_class {
     (*initialize)(
             na_class_t *na_class,
             const struct na_info *na_info,
-            na_bool_t listen
+            na_bool_t listen,
+            const struct na_init_info *init_info
             );
     na_return_t
     (*finalize)(
