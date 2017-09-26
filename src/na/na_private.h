@@ -80,6 +80,12 @@ struct na_class {
             void **plugin_context
             );
     na_return_t
+    (*context_set_id)(
+            na_class_t *na_class,
+            na_context_t *context,
+            na_uint8_t target_id
+            );
+    na_return_t
     (*context_destroy)(
             na_class_t *na_class,
             void *plugin_context
@@ -178,6 +184,7 @@ struct na_class {
             na_size_t     buf_size,
             void         *plugin_data,
             na_addr_t     dest,
+            na_uint8_t    target_id,
             na_tag_t      tag,
             na_op_id_t   *op_id
             );
@@ -209,6 +216,7 @@ struct na_class {
             na_size_t     buf_size,
             void         *plugin_data,
             na_addr_t     dest,
+            na_uint8_t    target_id,
             na_tag_t      tag,
             na_op_id_t   *op_id
             );
@@ -222,6 +230,7 @@ struct na_class {
             na_size_t     buf_size,
             void         *plugin_data,
             na_addr_t     source,
+            na_uint8_t    target_id,
             na_tag_t      tag,
             na_op_id_t   *op_id
             );
@@ -297,6 +306,7 @@ struct na_class {
             na_offset_t      remote_offset,
             na_size_t        length,
             na_addr_t        remote_addr,
+            na_uint8_t       remote_id,
             na_op_id_t      *op_id
             );
     na_return_t
@@ -311,6 +321,7 @@ struct na_class {
             na_offset_t      remote_offset,
             na_size_t        length,
             na_addr_t        remote_addr,
+            na_uint8_t       remote_id,
             na_op_id_t      *op_id
             );
     int
