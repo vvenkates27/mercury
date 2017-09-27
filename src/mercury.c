@@ -837,6 +837,20 @@ done:
 
 /*---------------------------------------------------------------------------*/
 hg_return_t
+HG_Context_set_priv(hg_context_t *context, void *priv)
+{
+    return HG_Core_context_set_priv(context, priv);
+}
+
+/*---------------------------------------------------------------------------*/
+void *
+HG_Context_get_priv(const hg_context_t *context)
+{
+    return HG_Core_context_get_priv(context);
+}
+
+/*---------------------------------------------------------------------------*/
+hg_return_t
 HG_Context_destroy(hg_context_t *context)
 {
     return HG_Core_context_destroy(context);

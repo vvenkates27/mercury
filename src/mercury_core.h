@@ -225,6 +225,33 @@ HG_Core_context_get_id(
         );
 
 /**
+ * Set user private data to context.
+ *
+ * \param context [IN]          pointer to HG context
+ * \param priv [IN]             user private data pointer
+ *
+ * \return HG_SUCCESS or corresponding HG error code
+ */
+HG_EXPORT hg_return_t
+HG_Core_context_set_priv(
+        hg_context_t *context,
+        void *priv
+        );
+
+
+/**
+ * Retrieve user private data from context.
+ *
+ * \param context [IN]          pointer to HG context
+ *
+ * \return user private data pointer, or NULL is not set.
+ */
+HG_EXPORT void *
+HG_Core_context_get_priv(
+        const hg_context_t *context
+        );
+
+/**
  * Post requests associated to context in order to receive incoming RPCs.
  * Requests are automatically re-posted after completion depending on the
  * value of \repost.

@@ -218,6 +218,33 @@ HG_Context_create_id(
         );
 
 /**
+ * Set user private data to context.
+ *
+ * \param context [IN]          pointer to HG context
+ * \param priv [IN]             user private data pointer
+ *
+ * \return HG_SUCCESS or corresponding HG error code
+ */
+HG_EXPORT hg_return_t
+HG_Context_set_priv(
+        hg_context_t *context,
+        void *priv
+        );
+
+
+/**
+ * Retrieve user private data from context.
+ *
+ * \param context [IN]          pointer to HG context
+ *
+ * \return user private data pointer, or NULL is not set.
+ */
+HG_EXPORT void *
+HG_Context_get_priv(
+        const hg_context_t *context
+        );
+
+/**
  * Destroy a context created by HG_Context_create().
  *
  * \param context [IN]          pointer to HG context

@@ -104,6 +104,7 @@ struct hg_context {
 #endif
     hg_bool_t finalizing;                         /* Prevent reposts */
     hg_atomic_int32_t n_handles;                  /* Atomic used for number of handles */
+    void *priv;                                   /* user private data pointer */
 };
 
 /* Info for function map */
@@ -3270,6 +3271,36 @@ HG_Core_context_get_id(const hg_context_t *context)
 
  done:
     return ret;
+}
+
+/*---------------------------------------------------------------------------*/
+hg_return_t
+HG_Core_context_set_priv(hg_context_t *context, void *priv)
+{
+    hg_return_t ret = HG_SUCCESS;
+
+    if (!context) {
+        HG_LOG_ERROR("NULL HG context");
+        ret = HG_INVALID_PARAM;
+        goto done;
+    }
+
+    context->priv = priv;
+
+ done:
+    return ret;
+}
+
+/*---------------------------------------------------------------------------*/
+void *
+HG_Core_context_get_priv(const hg_context_t *context)
+{
+    if (!context) {
+        HG_LOG_ERROR("NULL HG context");
+        return NULL;
+    }
+
+    return context->priv;
 }
 
 /*---------------------------------------------------------------------------*/
