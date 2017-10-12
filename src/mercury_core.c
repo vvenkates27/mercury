@@ -2983,6 +2983,13 @@ done:
 hg_context_t *
 HG_Core_context_create(hg_class_t *hg_class)
 {
+    return HG_Core_context_create_id(hg_class, 0);
+}
+
+/*---------------------------------------------------------------------------*/
+hg_context_t *
+HG_Core_context_create_id(hg_class_t *hg_class, hg_uint8_t id)
+{
     hg_return_t ret = HG_SUCCESS;
     struct hg_context *context = NULL;
     int na_poll_fd;
@@ -3033,7 +3040,7 @@ HG_Core_context_create(hg_class_t *hg_class)
     hg_thread_spin_init(&context->self_processing_list_lock);
 #endif
 
-    context->na_context = NA_Context_create(hg_class->na_class);
+    context->na_context = NA_Context_create_id(hg_class->na_class, id);
     if (!context->na_context) {
         HG_LOG_ERROR("Could not create NA context");
         ret = HG_NA_ERROR;
@@ -3075,6 +3082,11 @@ HG_Core_context_create(hg_class_t *hg_class)
     } else {
         context->progress = hg_core_progress_na;
     }
+
+    context->id = id;
+    context->request_mask = (id && context->hg_class->use_tag_mask) ?
+        (na_tag_t) (id << (context->hg_class->na_max_tag_msb
+            + 1 - HG_CORE_MASK_NBITS)) : 0;
 
     /* Increment context count of parent class */
     hg_atomic_incr32(&hg_class->n_contexts);
@@ -3222,34 +3234,6 @@ HG_Core_context_get_class(const hg_context_t *context)
     }
 
     ret = context->hg_class;
-
- done:
-    return ret;
-}
-
-/*---------------------------------------------------------------------------*/
-hg_return_t
-HG_Core_context_set_id(hg_context_t *context, hg_uint8_t id)
-{
-    hg_return_t ret = HG_SUCCESS;
-
-    if (!context) {
-        HG_LOG_ERROR("NULL HG context");
-        ret = HG_INVALID_PARAM;
-        goto done;
-    }
-
-    ret = NA_Context_set_id(context->hg_class->na_class, context->na_context, id);
-    if (ret != NA_SUCCESS) {
-        HG_LOG_ERROR("NA_Context_set_id(id %d) failed, ret %d.", id, ret);
-        ret = HG_NA_ERROR;
-        goto done;
-    }
-
-    context->id = id;
-    context->request_mask = (id && context->hg_class->use_tag_mask) ?
-        (na_tag_t) (id << (context->hg_class->na_max_tag_msb
-            + 1 - HG_CORE_MASK_NBITS)) : 0;
 
  done:
     return ret;

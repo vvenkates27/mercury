@@ -214,7 +214,8 @@ na_bmi_finalize(
 static na_return_t
 na_bmi_context_create(
         na_class_t          *na_class,
-        void               **context
+        void               **context,
+        na_uint8_t           id
         );
 
 static na_return_t
@@ -534,7 +535,6 @@ const na_class_t na_bmi_class_g = {
         NULL,                                 /* cleanup */
         NULL,                                 /* check_feature */
         na_bmi_context_create,                /* context_create */
-        NULL,                                 /* context_set_id */
         na_bmi_context_destroy,               /* context_destroy */
         na_bmi_op_create,                     /* op_create */
         na_bmi_op_destroy,                    /* op_destroy */
@@ -802,7 +802,8 @@ done:
 
 /*---------------------------------------------------------------------------*/
 static na_return_t
-na_bmi_context_create(na_class_t NA_UNUSED *na_class, void **context)
+na_bmi_context_create(na_class_t NA_UNUSED *na_class, void **context,
+    na_uint8_t NA_UNUSED id)
 {
     bmi_context_id *bmi_context = NULL;
     na_return_t ret = NA_SUCCESS;

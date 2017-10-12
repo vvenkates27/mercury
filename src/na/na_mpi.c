@@ -548,7 +548,6 @@ const na_class_t na_mpi_class_g = {
         NULL,                                 /* cleanup */
         NULL,                                 /* check_feature */
         NULL,                                 /* context_create */
-        NULL,                                 /* context_set_id */
         NULL,                                 /* context_destroy */
         NULL,                                 /* op_create */
         NULL,                                 /* op_destroy */

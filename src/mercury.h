@@ -179,7 +179,6 @@ HG_Class_get_output_eager_size(
  *
  * \remark This routine is internally equivalent to:
  *   - HG_Core_context_create()
- *   - HG_Core_context_set_id() with context ID set to 0
  *   - If listening
  *       - HG_Core_context_post() with repost set to HG_TRUE
  *
@@ -201,8 +200,7 @@ HG_Context_create(
  * Context must be destroyed by calling HG_Context_destroy().
  *
  * \remark This routine is internally equivalent to:
- *   - HG_Core_context_create()
- *   - HG_Core_context_set_id() with specified context ID
+ *   - HG_Core_context_create_id() with specified context ID
  *   - If listening
  *       - HG_Core_context_post() with repost set to HG_TRUE
  *
