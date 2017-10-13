@@ -246,6 +246,11 @@ struct na_ofi_info_recv_expected {
     na_tag_t noi_tag;
 };
 
+struct na_ofi_info_get {
+    void *noi_buf;
+    na_size_t noi_buf_size;
+};
+
 struct na_ofi_op_id {
     /* noo_magic_1 and noo_magic_2 are for data verification */
     na_uint64_t noo_magic_1;
@@ -263,6 +268,7 @@ struct na_ofi_op_id {
         struct na_ofi_info_lookup noo_lookup;
         struct na_ofi_info_recv_unexpected noo_recv_unexpected;
         struct na_ofi_info_recv_expected noo_recv_expected;
+        struct na_ofi_info_get noo_get;
     } noo_info;
     struct na_cb_completion_data noo_completion_data;
     na_uint64_t noo_magic_2;
@@ -3012,6 +3018,10 @@ na_ofi_get(na_class_t *na_class, na_context_t *context, na_cb_t callback,
     rma_key = (domain->nod_mr_mode == NA_OFI_MR_SCALABLE) ? NA_OFI_RMA_KEY :
               ofi_remote_mem_handle->nom_mr_key;
 
+    NA_LOG_DEBUG("Transferring %d bytes", length);
+    na_ofi_op_id->noo_info.noo_get.noi_buf = iov.iov_base;
+    na_ofi_op_id->noo_info.noo_get.noi_buf_size = iov.iov_len;
+
     do {
         na_ofi_class_lock(na_class);
         rc = fi_readv(ep_hdl, &iov, &local_desc, 1 /* count */,
@@ -3191,6 +3201,8 @@ na_ofi_handle_rma_event(na_class_t NA_UNUSED *class,
     struct na_ofi_op_id *na_ofi_op_id;
     struct na_ofi_addr *na_ofi_addr;
     na_return_t ret = NA_SUCCESS;
+    char *buf;
+    uint32_t value;
 
     na_ofi_op_id = container_of(cq_event->op_context, struct na_ofi_op_id,
                                 noo_fi_ctx);
@@ -3211,6 +3223,13 @@ na_ofi_handle_rma_event(na_class_t NA_UNUSED *class,
         NA_LOG_ERROR("ignore the rma_event as the op is completed.");
         return;
     }
+
+    /* Check last bytes */
+    buf = na_ofi_op_id->noo_info.noo_get.noi_buf;
+    buf += na_ofi_op_id->noo_info.noo_get.noi_buf_size - sizeof(uint32_t);
+    value = *((uint32_t *) (void *) buf);
+    NA_LOG_DEBUG("Value is 0x%08X (buf_size=%d)", value,
+        na_ofi_op_id->noo_info.noo_get.noi_buf_size);
 
     na_ofi_addr = (struct na_ofi_addr *)na_ofi_op_id->noo_addr;
 
