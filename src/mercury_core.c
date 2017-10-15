@@ -3908,7 +3908,13 @@ HG_Core_forward(hg_handle_t handle, hg_cb_t callback, void *arg,
     header_size = hg_proc_header_request_get_size() +
         hg_handle->na_in_header_offset;
     hg_handle->in_header.id = hg_handle->hg_info.id;
-    hg_handle->in_header.cookie = hg_handle->hg_info.target_id;
+    /*
+     * Set the in_header.cookie as origin context's target_id, so at target side
+     * the cookie is unpacked and assign to hg_handle->hg_info.target_id, so can
+     * make NA layer can know which target id to send the response.
+     */
+    /* hg_handle->in_header.cookie = hg_handle->hg_info.target_id; */
+    hg_handle->in_header.cookie = HG_Core_context_get_id(hg_handle->hg_info.context);
     hg_handle->in_header.extra_in_handle = extra_in_handle;
     flags = (extra_in_handle != HG_BULK_NULL) ? HG_PROC_HEADER_BULK_EXTRA : 0;
     hg_handle->in_header.flags |= flags;
